@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-- Phase 0 complete — beginning Phase 1 planning
+- Phase 1 complete — beginning Phase 2 planning
 
 ---
 
@@ -72,13 +72,18 @@
 
 ---
 
-## Upcoming — Phase 1 (not started)
-- Supabase Auth setup (email provider + SUPABASE_URL / SUPABASE_SERVICE_KEY in .env)
-- Auth trigger: auto-insert `public.profiles` on new `auth.users` (run via Supabase SQL editor — see `backend/app/db/CLAUDE.md`)
-- Add `/v1` prefix to all API routes in `main.py`
-- Vendor profile creation + TCG interest tags
-- Manual inventory add
-- Inventory list view
+## Phase 1 checklist
+- [x] Supabase Auth trigger — auto-insert `public.profiles` on new `auth.users`
+- [x] Add `/v1` prefix to all API routes in `main.py`
+- [x] Migration 0003 — `vendor_profiles` + `inventory_items`
+- [x] SQLAlchemy models — `VendorProfile`, `InventoryItem`, `Profile`
+- [x] Auth dependency — JWT verification via Supabase JWKS (ES256)
+- [x] `POST /api/v1/vendor/profile` — create vendor profile
+- [x] `GET /api/v1/vendor/profile` — get own vendor profile
+- [x] `PATCH /api/v1/vendor/profile` — update vendor profile
+- [x] `POST /api/v1/inventory` — add inventory item
+- [x] `GET /api/v1/inventory` — list inventory with filters
+- [x] End-to-end auth test — JWT → profile → inventory item → list all confirmed
 
 ---
 
