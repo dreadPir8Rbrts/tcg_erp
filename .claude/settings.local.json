@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:tcgdex.dev)",
+      "WebSearch",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:api.tcgdex.net)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(claude mcp:*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(alembic upgrade:*)",
+      "mcp__supabase__list_projects",
+      "mcp__supabase__execute_sql",
+      "Bash(python -c \"from celery_app import app; print\\(''Registered tasks:'', list\\(app.tasks.keys\\(\\)\\)\\)\")",
+      "Bash(python -c \":*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
+}
