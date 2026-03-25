@@ -20,6 +20,7 @@ app = Celery(
     include=[
         "app.tasks.catalog_sync",
         "app.tasks.price_sync",
+        "app.tasks.scan_pipeline",
     ],
 )
 

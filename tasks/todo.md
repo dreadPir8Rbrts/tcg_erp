@@ -1,21 +1,22 @@
 # CardOps — Task Board
 
-## Active phase: Phase 0 — Catalog foundation
+## Active phase: Phase 2 — Scan pipeline
 
 ---
 
 ## In progress
-- Phase 1 complete — beginning Phase 2 planning
+- Phase 2 backend complete (migration, Celery task, scan endpoints, WebSocket)
+- Next: `create-next-app` frontend scaffold + scan confirmation UI
 
 ---
 
-## Phase 0 checklist
+## Phase 0 checklist ✅
 
 ### Supabase + environment setup
 - [x] Create Supabase project (free tier)
 - [x] Copy `DATABASE_URL` (transaction pooler, port 6543) into `backend/.env`
 - [x] Copy `MIGRATION_DATABASE_URL` (direct connection, port 5432) into `backend/.env`
-- [ ] Copy `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` into `backend/.env` _(not needed until Phase 1 auth)_
+- [x] Copy `SUPABASE_URL` into `backend/.env`
 - [x] Add `.env` to `.gitignore`; `backend/.env.example` created with placeholder keys
 - [x] Confirm Supabase project reachable — `DATABASE_URL` connection verified
 - [x] Confirm `MIGRATION_DATABASE_URL` connection (direct URL — verified)
@@ -25,54 +26,30 @@
 - [x] `requirements.txt` with core dependencies (using pip + venv, not pyproject.toml)
 - [x] Python venv at `backend/.venv` — activate before all Python commands
 - [x] `alembic.ini` configured at `backend/` root, pointing to `app/db/` as script location
-- [ ] Initialize `frontend/` with `create-next-app` (TypeScript, Tailwind, App Router) _(Phase 1)_
 
 ### Alembic migrations
-- [x] `20260318_0001_catalog_tables.py` — `series`, `sets`, `cards`, `price_snapshots` (all catalog in one migration)
+- [x] `20260318_0001_catalog_tables.py` — `series`, `sets`, `cards`, `price_snapshots`
 - [x] `20260318_0002_profiles.py` — `public.profiles` referencing `auth.users` via raw SQL
-- [x] Run `alembic upgrade head` against Supabase — both migrations applied cleanly
+- [x] Run `alembic upgrade head` — all migrations applied cleanly
 - [x] Verify all tables created correctly in Supabase dashboard
 
 ### Catalog seed
-- [x] `tcgdex-sdk==2.2.1` in requirements.txt (2.3.0 does not exist)
+- [x] `tcgdex-sdk==2.2.1` in requirements.txt
 - [x] Write `backend/seed_catalog.py` — series → sets → cards → price_snapshots ingestion
-- [x] Run `alembic upgrade head` first (tables must exist before seeding)
 - [x] Full run: `python seed_catalog.py` — 22,754 cards seeded (English)
 - [x] Validate: 21 series, 200 sets, 22,754 cards
-- [x] Spot-check: `swsh3-136` Furret — attacks JSONB, variants, image_url all correct
-- [x] Spot-check: `base1-4` Charizard — hp 120, Stage2, holo+firstEdition variants correct
+- [x] Spot-check: `swsh3-136` Furret and `base1-4` Charizard verified correct
 
 ### Celery setup
 - [x] Write `backend/celery_app.py` with beat schedule
-- [x] Implement `backend/app/tasks/catalog_sync.py`:
-  - [x] `catalog.sync_new_sets` (runs 2am nightly)
-  - [x] `catalog.delta_sync_cards` (runs 3am nightly)
-- [x] Implement `backend/app/tasks/price_sync.py`:
-  - [x] `prices.refresh_active_inventory` (runs every 6h)
-- [x] Test tasks run successfully in local Celery worker
-  - [x] Worker starts and connects to Redis
-  - [x] All 3 tasks appear in `[tasks]` list on startup
-  - [x] `catalog.sync_new_sets` — ran successfully, returned `{new_sets: 0, new_cards: 0}`
-  - [x] `catalog.delta_sync_cards` — ran cleanly, found `exu` set with updates, 404 handling worked
-  - [x] `prices.refresh_active_inventory` — returned `{cards_refreshed: 0, rows_written: 0}` (inventory_items is Phase 1 — graceful early return)
+- [x] `catalog.sync_new_sets`, `catalog.delta_sync_cards`, `prices.refresh_active_inventory` — all tested
 
 ### FastAPI catalog endpoints
-- [x] `GET /api/cards/{id}` — single card by TCGdex ID (note: no `/v1/` prefix yet — add when Phase 1 starts)
-- [x] `GET /api/cards?q=` — search by name (ILIKE, GIN index)
-- [x] `GET /api/sets` — list all sets, optional `?serie_id=` filter
-- [x] `GET /api/sets/{id}` — single set with card count
-- [x] Verify endpoints return correct data via HTTP request — all 4 confirmed
-
-### Phase 0 complete criteria
-- [x] All migrations applied cleanly (`alembic upgrade head` with no errors)
-- [x] ~18,000+ cards in `cards` table — 22,754 seeded
-- [x] All Celery beat tasks registered and tested
-- [x] Catalog endpoints return correct responses against real seeded data
-- [x] No hardcoded credentials anywhere in code — verified, only safe localhost default in Settings
+- [x] `GET /api/v1/cards/{id}`, `GET /api/v1/cards?q=`, `GET /api/v1/sets`, `GET /api/v1/sets/{id}` — all verified
 
 ---
 
-## Phase 1 checklist
+## Phase 1 checklist ✅
 - [x] Supabase Auth trigger — auto-insert `public.profiles` on new `auth.users`
 - [x] Add `/v1` prefix to all API routes in `main.py`
 - [x] Migration 0003 — `vendor_profiles` + `inventory_items`
@@ -87,26 +64,46 @@
 
 ---
 
-## Upcoming — Phase 2 (not started)
-- S3 presigned URL upload endpoint
-- Celery task: Claude Vision card identification
-- Scan confirmation UI
-- Scan → add inventory / log sale
+## Phase 2 checklist
+
+### Backend (complete)
+- [x] `boto3==1.35.99` + `anthropic==0.40.0` added to requirements.txt
+- [x] AWS + Anthropic env vars added to Settings and `backend/.env`
+- [x] Migration 0004 — `scan_jobs` table
+- [x] SQLAlchemy model — `ScanJob` in `app/models/scans.py`
+- [x] Celery task — `scans.process_scan_job` in `app/tasks/scan_pipeline.py`
+- [x] `POST /api/v1/scans` — create scan job + presigned S3 PUT URL
+- [x] `POST /api/v1/scans/{id}/trigger` — dispatch Celery task after S3 upload
+- [x] `GET /api/v1/scans/{id}` — poll scan job status
+- [x] `WS /api/v1/scans/{id}/ws` — WebSocket push on completion
+
+### Frontend (not started)
+- [ ] `create-next-app` scaffold — TypeScript, Tailwind, App Router in `frontend/`
+- [ ] Install shadcn/ui, React Query, Zustand
+- [ ] Auth: Supabase JS client + session management
+- [ ] Scan page: camera/file upload → presigned S3 PUT → trigger endpoint
+- [ ] WebSocket listener → completion push
+- [ ] Scan confirmation UI: photo + identified card side-by-side
+- [ ] Confirm → `POST /api/v1/inventory` (add_inventory action)
+
+### Phase 2 complete criteria
+- [ ] Vendor can upload a card photo from the browser
+- [ ] Claude correctly identifies the card
+- [ ] Confirmation UI shows identified card with confidence score
+- [ ] Confirming adds the card to inventory
 
 ---
 
-## Completed tasks
-- Backend project structure scaffolded
-- SQLAlchemy models: `Serie`, `Set`, `Card`, `PriceSnapshot` in `app/models/catalog.py`
-- Alembic environment configured (`app/db/env.py`, `app/db/script.py.mako`)
-- Migration 0001: all catalog tables with GIN index on `cards.name`, check constraints, UNIQUE on price_snapshots
-- Migration 0002: `public.profiles` with cross-schema FK to `auth.users` via raw SQL
-- `seed_catalog.py` written with full ingestion logic, pricing upserts, CLI flags (`--serie-id`, `--set-id`)
-- Catalog API endpoints scaffolded in `app/api/catalog.py`
-- Supabase connection verified (both pooler and direct URLs)
-- Python venv configured, all dependencies installed
+## Upcoming — Phase 3 (not started)
+- Card show listings (admin-seeded)
+- Vendor show registration + table location
+- Show inventory tagging
+- Show detail page with vendor list
 
 ---
 
-## Results / review
-_Added after phase completion_
+## Upcoming — Phase 4 (not started)
+- Browse shows (no auth required)
+- Browse vendors at a show
+- Search card inventory across a show
+- Card price lookup (from price_snapshots)

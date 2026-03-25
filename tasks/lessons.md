@@ -80,6 +80,22 @@
 **Rule:** Do not call `config.set_main_option("sqlalchemy.url", url)` in `env.py` when the URL contains URL-encoded characters (e.g. `%24`). Python's `configparser` interprets `%` as interpolation syntax and raises `ValueError`. Instead, build the engine directly with `create_engine(migration_url)` in `run_migrations_online()` and pass `url=migration_url` in `run_migrations_offline()`.
 **Context:** `backend/app/db/env.py`
 
+### 2026-03-25 — Supabase uses ES256 asymmetric JWT signing on new projects
+**Rule:** Do not use HS256 + shared secret for JWT verification. New Supabase projects use ECC (P-256) asymmetric signing (ES256). Always verify JWTs by fetching the JWKS endpoint at `{SUPABASE_URL}/auth/v1/.well-known/jwks.json` and using `jose.jwk.construct()`. Never store a JWT secret in `.env` for this purpose.
+**Context:** `backend/app/dependencies.py`
+
+### 2026-03-25 — Supabase auth trigger does not backfill existing users
+**Rule:** The `on_auth_user_created` trigger only fires for new signups. Any user created before the trigger was installed will not have a `public.profiles` row. Manually insert missing rows via Supabase SQL editor: `INSERT INTO public.profiles (id, role) VALUES ('<user-id>', 'vendor') ON CONFLICT (id) DO NOTHING`.
+**Context:** Supabase Auth setup, Phase 1 onboarding
+
+### 2026-03-25 — SQLAlchemy 2.0 does not support lazy="dynamic" on relationships
+**Rule:** Never use `lazy="dynamic"` on SQLAlchemy 2.0 relationships — it raises `InvalidRequestError` at mapper init. Use `lazy="select"` (default) for standard loading. Use `lazy="dynamic"` only existed in 1.x.
+**Context:** All SQLAlchemy model files with relationships
+
+### 2026-03-25 — Cross-schema FK strings in SQLAlchemy ORM cause NoReferencedTableError
+**Rule:** Do not declare `ForeignKey("public.cards.id")` string references in SQLAlchemy model columns when the target model is defined with `schema="public"`. SQLAlchemy fails to resolve the table at flush time. The FK is already enforced at the database level by the migration — omit it from the ORM column definition and add a comment: `# FK enforced at DB level`.
+**Context:** `app/models/inventory.py`, any model referencing catalog tables
+
 ### 2026-03-18 — pydantic-settings rejects undeclared env vars
 **Rule:** Any env var present in `.env` must have a corresponding field in the `Settings` class, or pydantic-settings raises `extra_forbidden`. Add all expected env vars as fields with defaults where appropriate (e.g. `redis_url: str = "redis://localhost:6379/0"`).
 **Context:** `backend/app/db/session.py`, any Settings class

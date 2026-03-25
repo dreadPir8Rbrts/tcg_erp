@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     supabase_url: Optional[str] = None
     supabase_service_key: Optional[str] = None  # for server-side admin operations (Phase 2+)
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_s3_bucket: Optional[str] = None
+    aws_region: str = "us-east-1"
+    anthropic_api_key: Optional[str] = None
 
     model_config = {"env_file": ".env"}
 
