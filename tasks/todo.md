@@ -77,14 +77,21 @@
 - [x] `GET /api/v1/scans/{id}` — poll scan job status
 - [x] `WS /api/v1/scans/{id}/ws` — WebSocket push on completion
 
-### Frontend (not started)
-- [ ] `create-next-app` scaffold — TypeScript, Tailwind, App Router in `frontend/`
-- [ ] Install shadcn/ui, React Query, Zustand
-- [ ] Auth: Supabase JS client + session management
-- [ ] Scan page: camera/file upload → presigned S3 PUT → trigger endpoint
-- [ ] WebSocket listener → completion push
-- [ ] Scan confirmation UI: photo + identified card side-by-side
-- [ ] Confirm → `POST /api/v1/inventory` (add_inventory action)
+### Frontend (in progress)
+- [x] `create-next-app@14` scaffold — TypeScript, Tailwind v3, App Router in `frontend/`
+- [x] Install `@supabase/supabase-js`, `@tanstack/react-query`, `zustand`
+- [x] `npx shadcn@latest init` — Nova preset, Radix, Lucide/Geist
+- [x] shadcn components installed: `button`, `card`, `badge`, `progress`
+- [x] `lib/supabase.ts` — Supabase JS client + `getAccessToken()`
+- [x] `lib/api.ts` — typed fetch helpers: `createScanJob`, `uploadImageToS3`, `triggerScanJob`, `getCard`, `addInventoryItem`
+- [x] `app/providers.tsx` — React Query provider
+- [x] `app/layout.tsx` — wrapped with Providers, metadata updated
+- [x] `app/scan/page.tsx` — full scan UI: upload → S3 → trigger → WebSocket → confirmation
+- [x] `frontend/.env.local` — `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL`
+- [x] CSS conflict fixed — shadcn v4 imports replaced with Tailwind v3 directives in `globals.css`
+- [x] `tailwind.config.ts` — full shadcn color token map added
+- [ ] Verify `npm run dev` starts without errors
+- [ ] End-to-end scan test: upload photo → Claude identifies card → confirm → inventory
 
 ### Phase 2 complete criteria
 - [ ] Vendor can upload a card photo from the browser

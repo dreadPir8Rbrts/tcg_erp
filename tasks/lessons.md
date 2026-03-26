@@ -96,6 +96,10 @@
 **Rule:** Do not declare `ForeignKey("public.cards.id")` string references in SQLAlchemy model columns when the target model is defined with `schema="public"`. SQLAlchemy fails to resolve the table at flush time. The FK is already enforced at the database level by the migration — omit it from the ORM column definition and add a comment: `# FK enforced at DB level`.
 **Context:** `app/models/inventory.py`, any model referencing catalog tables
 
+### 2026-03-26 — shadcn v4 + Tailwind v3 CSS conflict in Next.js 14
+**Rule:** `create-next-app@14` installs Tailwind v3. `npx shadcn@latest init` installs shadcn v4 which generates Tailwind v4 syntax (`@import "shadcn/tailwind.css"`, `@import "tw-animate-css"`). These are incompatible with Tailwind v3. Fix: rewrite `globals.css` to use `@tailwind base/components/utilities` directives and HSL CSS variables, and update `tailwind.config.ts` with the full shadcn color token map. Do not use the shadcn v4 import syntax with Tailwind v3.
+**Context:** `frontend/app/globals.css`, `frontend/tailwind.config.ts`
+
 ### 2026-03-18 — pydantic-settings rejects undeclared env vars
 **Rule:** Any env var present in `.env` must have a corresponding field in the `Settings` class, or pydantic-settings raises `extra_forbidden`. Add all expected env vars as fields with defaults where appropriate (e.g. `redis_url: str = "redis://localhost:6379/0"`).
 **Context:** `backend/app/db/session.py`, any Settings class
