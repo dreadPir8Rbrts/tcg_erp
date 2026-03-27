@@ -1,103 +1,83 @@
 # CardOps — Task Board
 
-## Active phase: Phase 2 — Scan pipeline
-
----
-
-## In progress
-- Phase 2 backend complete (migration, Celery task, scan endpoints, WebSocket)
-- Next: `create-next-app` frontend scaffold + scan confirmation UI
+## Active phase: Phase 2 complete + Vendor Tools (beyond spec)
 
 ---
 
 ## Phase 0 checklist ✅
-
-### Supabase + environment setup
-- [x] Create Supabase project (free tier)
-- [x] Copy `DATABASE_URL` (transaction pooler, port 6543) into `backend/.env`
-- [x] Copy `MIGRATION_DATABASE_URL` (direct connection, port 5432) into `backend/.env`
-- [x] Copy `SUPABASE_URL` into `backend/.env`
-- [x] Add `.env` to `.gitignore`; `backend/.env.example` created with placeholder keys
-- [x] Confirm Supabase project reachable — `DATABASE_URL` connection verified
-- [x] Confirm `MIGRATION_DATABASE_URL` connection (direct URL — verified)
-
-### Project scaffolding
-- [x] Initialize `backend/` with FastAPI project structure
-- [x] `requirements.txt` with core dependencies (using pip + venv, not pyproject.toml)
-- [x] Python venv at `backend/.venv` — activate before all Python commands
-- [x] `alembic.ini` configured at `backend/` root, pointing to `app/db/` as script location
-
-### Alembic migrations
-- [x] `20260318_0001_catalog_tables.py` — `series`, `sets`, `cards`, `price_snapshots`
-- [x] `20260318_0002_profiles.py` — `public.profiles` referencing `auth.users` via raw SQL
-- [x] Run `alembic upgrade head` — all migrations applied cleanly
-- [x] Verify all tables created correctly in Supabase dashboard
-
-### Catalog seed
-- [x] `tcgdex-sdk==2.2.1` in requirements.txt
-- [x] Write `backend/seed_catalog.py` — series → sets → cards → price_snapshots ingestion
-- [x] Full run: `python seed_catalog.py` — 22,754 cards seeded (English)
-- [x] Validate: 21 series, 200 sets, 22,754 cards
-- [x] Spot-check: `swsh3-136` Furret and `base1-4` Charizard verified correct
-
-### Celery setup
-- [x] Write `backend/celery_app.py` with beat schedule
-- [x] `catalog.sync_new_sets`, `catalog.delta_sync_cards`, `prices.refresh_active_inventory` — all tested
-
-### FastAPI catalog endpoints
-- [x] `GET /api/v1/cards/{id}`, `GET /api/v1/cards?q=`, `GET /api/v1/sets`, `GET /api/v1/sets/{id}` — all verified
+- [x] Supabase project + DATABASE_URL / MIGRATION_DATABASE_URL / SUPABASE_URL in backend/.env
+- [x] FastAPI project scaffold, venv, alembic.ini
+- [x] Migration 0001 — series, sets, cards, price_snapshots
+- [x] Migration 0002 — public.profiles referencing auth.users
+- [x] seed_catalog.py — 22,754 cards (21 series, 200 sets) seeded
+- [x] Celery beat: catalog.sync_new_sets, catalog.delta_sync_cards, prices.refresh_active_inventory
+- [x] GET /api/v1/cards/{id}, GET /api/v1/cards, GET /api/v1/sets, GET /api/v1/sets/{id}
 
 ---
 
 ## Phase 1 checklist ✅
-- [x] Supabase Auth trigger — auto-insert `public.profiles` on new `auth.users`
-- [x] Add `/v1` prefix to all API routes in `main.py`
-- [x] Migration 0003 — `vendor_profiles` + `inventory_items`
-- [x] SQLAlchemy models — `VendorProfile`, `InventoryItem`, `Profile`
-- [x] Auth dependency — JWT verification via Supabase JWKS (ES256)
-- [x] `POST /api/v1/vendor/profile` — create vendor profile
-- [x] `GET /api/v1/vendor/profile` — get own vendor profile
-- [x] `PATCH /api/v1/vendor/profile` — update vendor profile
-- [x] `POST /api/v1/inventory` — add inventory item
-- [x] `GET /api/v1/inventory` — list inventory with filters
-- [x] End-to-end auth test — JWT → profile → inventory item → list all confirmed
+- [x] Supabase Auth trigger — auto-insert public.profiles on signup
+- [x] Migration 0003 — vendor_profiles + inventory_items
+- [x] SQLAlchemy models — VendorProfile, InventoryItem, Profile
+- [x] Auth dependency — ES256 JWT via Supabase JWKS
+- [x] POST/GET/PATCH /api/v1/vendor/profile
+- [x] POST/GET /api/v1/inventory
+- [x] End-to-end auth test passed
 
 ---
 
-## Phase 2 checklist
+## Phase 2 checklist ✅
 
-### Backend (complete)
-- [x] `boto3==1.35.99` + `anthropic==0.40.0` added to requirements.txt
-- [x] AWS + Anthropic env vars added to Settings and `backend/.env`
-- [x] Migration 0004 — `scan_jobs` table
-- [x] SQLAlchemy model — `ScanJob` in `app/models/scans.py`
-- [x] Celery task — `scans.process_scan_job` in `app/tasks/scan_pipeline.py`
-- [x] `POST /api/v1/scans` — create scan job + presigned S3 PUT URL
-- [x] `POST /api/v1/scans/{id}/trigger` — dispatch Celery task after S3 upload
-- [x] `GET /api/v1/scans/{id}` — poll scan job status
-- [x] `WS /api/v1/scans/{id}/ws` — WebSocket push on completion
+### Backend
+- [x] Migration 0004 — scan_jobs table
+- [x] ScanJob SQLAlchemy model (vendor_id FK removed from ORM — enforced at DB level)
+- [x] scans.process_scan_job Celery task (S3 → Claude Vision → card match)
+- [x] POST /api/v1/scans — create job + presigned S3 PUT URL (SigV4, us-east-2)
+- [x] POST /api/v1/scans/{id}/trigger — send_task via celery_app.app (not shared_task binding)
+- [x] GET /api/v1/scans/{id} — poll status
+- [x] WS /api/v1/scans/{id}/ws — WebSocket push with db.expire_all() per poll
+- [x] CORS middleware added to main.py (allow localhost:3000)
+- [x] websockets==12.0 installed for uvicorn WebSocket support
 
-### Frontend (in progress)
-- [x] `create-next-app@14` scaffold — TypeScript, Tailwind v3, App Router in `frontend/`
-- [x] Install `@supabase/supabase-js`, `@tanstack/react-query`, `zustand`
-- [x] `npx shadcn@latest init` — Nova preset, Radix, Lucide/Geist
-- [x] shadcn components installed: `button`, `card`, `badge`, `progress`
-- [x] `lib/supabase.ts` — Supabase JS client + `getAccessToken()`
-- [x] `lib/api.ts` — typed fetch helpers: `createScanJob`, `uploadImageToS3`, `triggerScanJob`, `getCard`, `addInventoryItem`
-- [x] `app/providers.tsx` — React Query provider
-- [x] `app/layout.tsx` — wrapped with Providers, metadata updated
-- [x] `app/scan/page.tsx` — full scan UI: upload → S3 → trigger → WebSocket → confirmation
-- [x] `frontend/.env.local` — `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL`
-- [x] CSS conflict fixed — shadcn v4 imports replaced with Tailwind v3 directives in `globals.css`
-- [x] `tailwind.config.ts` — full shadcn color token map added
-- [ ] Verify `npm run dev` starts without errors
-- [ ] End-to-end scan test: upload photo → Claude identifies card → confirm → inventory
+### Frontend
+- [x] Next.js 14 scaffold in frontend/ — Tailwind v3, App Router, TypeScript
+- [x] shadcn components: button, card, badge, progress, tabs
+- [x] lib/supabase.ts, lib/api.ts, app/providers.tsx, app/layout.tsx
+- [x] app/login/page.tsx — Supabase email/password login, redirects to /scan
+- [x] app/scan/page.tsx — full scan UI with auth guard
+- [x] next.config.mjs — assets.tcgdex.net + *.amazonaws.com in remotePatterns
+- [x] End-to-end scan verified: upload → S3 → Celery → Claude → WebSocket → confirmation UI
 
-### Phase 2 complete criteria
-- [ ] Vendor can upload a card photo from the browser
-- [ ] Claude correctly identifies the card
-- [ ] Confirmation UI shows identified card with confidence score
-- [ ] Confirming adds the card to inventory
+### Phase 2 complete criteria ✅
+- [x] Vendor uploads card photo from browser
+- [x] Claude correctly identifies the card (base1-58 @ 0.95 confidence verified)
+- [x] Confirmation UI shows identified card with confidence score
+- [x] Confirming adds card to inventory
+
+---
+
+## Vendor Tools (post-Phase 2, in progress)
+
+### Card search — /card-search ✅
+- [x] GET /api/v1/cards extended — JOINs sets + series, returns enriched CardDetailResponse
+- [x] Search params: name, card_num, set_name, series_name (AND logic, any combination)
+- [x] Response fields: card_num, set_name, release_date, series_name, series_logo_url
+- [x] frontend/app/card-search/page.tsx — 4-field search, debounced, Add to inventory per result
+
+### Vendor profile — /vendor-profile (in progress)
+- [x] Migration 0005 — background_img + avatar_img added to vendor_profiles
+- [x] POST /api/v1/vendor/profile/image — presigned PUT URL for background/avatar upload
+- [x] S3 bucket policy — profiles/* publicly readable
+- [x] Block public access disabled on S3 bucket for profiles/* prefix
+- [x] GET /api/v1/inventory — now JOINs cards/sets/series, returns InventoryItemWithCardResponse
+- [x] frontend/app/vendor-profile/page.tsx:
+  - Hero banner with background image upload
+  - Circle avatar with upload button
+  - display_name, bio, buying_rate, trade_rate, tcg_interests display
+  - Full-width tab bar (Inventory | Wishlist)
+  - Inventory tab: searchable list with card image, name, set, condition, price
+  - Wishlist tab: placeholder
+- [ ] Wishlist backend + frontend (not started)
 
 ---
 
@@ -106,8 +86,6 @@
 - Vendor show registration + table location
 - Show inventory tagging
 - Show detail page with vendor list
-
----
 
 ## Upcoming — Phase 4 (not started)
 - Browse shows (no auth required)

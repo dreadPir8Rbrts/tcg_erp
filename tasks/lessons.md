@@ -40,6 +40,42 @@
 
 ## Session corrections
 
+### 2026-03-27 — State variable name collision with React setter
+**Rule:** Never name a state variable with the same identifier as a React useState setter from another state declaration. E.g. `const [name, setName]` and `const [setName, setSetName]` in the same component causes a compile error. Use distinct names like `setQuery` for set-name search state.
+**Context:** All React components with multiple useState declarations
+
+### 2026-03-27 — Celery shared_task uses AMQP default broker when celery app not initialized first
+**Rule:** Never use `@shared_task` dispatch (`task.delay()`) from FastAPI routes when `celery_app.py` may not have been imported first. Instead, use `celery_app.app.send_task("task.name", args=[...])` in the route — this dispatches by name through the explicitly configured broker (Redis) regardless of import order.
+**Context:** `app/api/scans.py`, any FastAPI route that dispatches Celery tasks
+
+### 2026-03-27 — SQLAlchemy session caches stale data in WebSocket polling loop
+**Rule:** Always call `db.expire_all()` before each `db.get()` inside a WebSocket polling loop. SQLAlchemy's identity map returns cached objects and will never see updates made by other processes (e.g. Celery workers) without expiring the cache first.
+**Context:** `app/api/scans.py` WebSocket endpoint, any polling loop using a shared session
+
+### 2026-03-27 — S3 presigned PUT returns 400 when AWS_REGION is wrong
+**Rule:** Always verify `AWS_REGION` in `backend/.env` matches the actual bucket region. The error message from S3 XML response body contains the correct region: `<Region>us-east-2</Region>`. Check the response body in DevTools Network tab when debugging S3 400 errors.
+**Context:** `backend/.env`, `app/api/scans.py`, `app/api/vendor.py`
+
+### 2026-03-27 — S3 CORS must use virtual-hosted style URL, not path-style
+**Rule:** Never set `endpoint_url` on the boto3 S3 client when generating presigned URLs for browser upload. Setting `endpoint_url` switches to path-style (`s3.region.amazonaws.com/bucket`) which may not match the bucket's CORS config. Without `endpoint_url`, boto3 generates virtual-hosted style (`bucket.s3.region.amazonaws.com`) which is where the CORS policy is applied.
+**Context:** `app/api/scans.py`, `app/api/vendor.py` — any presigned URL generation
+
+### 2026-03-27 — S3 Block Public Access must be disabled before bucket policy takes effect
+**Rule:** When adding a bucket policy that allows public `s3:GetObject`, first disable "Block public access" in the bucket settings. The block settings override bucket policies — the policy will not save or take effect while block public access is enabled.
+**Context:** AWS S3 console, profile image setup
+
+### 2026-03-27 — Cross-schema FK on ScanJob.vendor_id causes NoReferencedTableError
+**Rule:** Same rule as inventory_items — never declare `ForeignKey("public.vendor_profiles.id")` in the ScanJob ORM model. Remove FK from the mapped_column and add `# FK enforced at DB level` comment. The DB migration already enforces the constraint.
+**Context:** `app/models/scans.py`
+
+### 2026-03-27 — websockets package required for uvicorn WebSocket support
+**Rule:** Install `websockets==12.0` explicitly (added to requirements.txt). Do not use `uvicorn[standard]` (requires Rust/maturin). Without `websockets`, uvicorn logs "No supported WebSocket library detected" and WebSocket routes return 404.
+**Context:** `backend/requirements.txt`
+
+### 2026-03-27 — Next.js requires explicit hostname allowlist for external images
+**Rule:** Any external image hostname used with `next/image` must be added to `images.remotePatterns` in `next.config.mjs`. Required entries for this project: `assets.tcgdex.net` (card images), `*.amazonaws.com` (S3 profile images). Add new entries whenever a new image source is introduced.
+**Context:** `frontend/next.config.mjs`
+
 ### 2026-03-24 — TCGdex SDK raises HTTPError on 404, does not return None
 **Rule:** Wrap all `sdk.card.getSync()`, `sdk.set.getSync()`, and `sdk.serie.getSync()` calls in `try/except (urllib.error.HTTPError, urllib.error.URLError)`. The SDK raises rather than returns None for missing resources. Log the card/set ID and continue — never let a single 404 abort the run.
 **Context:** `seed_catalog.py`, `app/tasks/catalog_sync.py`
@@ -73,7 +109,7 @@
 **Context:** `backend/.env`, `backend/app/db/env.py`
 
 ### 2026-03-19 — Alembic server_default for JSONB must use sa.text()
-**Rule:** Never pass a plain Python string as `server_default` for JSONB columns. Use `sa.text("'{}'")`  so SQLAlchemy treats it as a SQL expression rather than a literal — plain strings get triple-quoted into `'''{}'''` which is invalid JSON.
+**Rule:** Never pass a plain Python string as `server_default` for JSONB columns. Use `sa.text("'{}'")` so SQLAlchemy treats it as a SQL expression rather than a literal — plain strings get triple-quoted into `'''{}'''` which is invalid JSON.
 **Context:** All migration files with JSONB columns
 
 ### 2026-03-19 — Alembic env.py must not use config.set_main_option() with URL-encoded passwords
@@ -89,12 +125,12 @@
 **Context:** Supabase Auth setup, Phase 1 onboarding
 
 ### 2026-03-25 — SQLAlchemy 2.0 does not support lazy="dynamic" on relationships
-**Rule:** Never use `lazy="dynamic"` on SQLAlchemy 2.0 relationships — it raises `InvalidRequestError` at mapper init. Use `lazy="select"` (default) for standard loading. Use `lazy="dynamic"` only existed in 1.x.
+**Rule:** Never use `lazy="dynamic"` on SQLAlchemy 2.0 relationships — it raises `InvalidRequestError` at mapper init. Use `lazy="select"` (default) for standard loading.
 **Context:** All SQLAlchemy model files with relationships
 
 ### 2026-03-25 — Cross-schema FK strings in SQLAlchemy ORM cause NoReferencedTableError
-**Rule:** Do not declare `ForeignKey("public.cards.id")` string references in SQLAlchemy model columns when the target model is defined with `schema="public"`. SQLAlchemy fails to resolve the table at flush time. The FK is already enforced at the database level by the migration — omit it from the ORM column definition and add a comment: `# FK enforced at DB level`.
-**Context:** `app/models/inventory.py`, any model referencing catalog tables
+**Rule:** Do not declare `ForeignKey("public.cards.id")` or `ForeignKey("public.vendor_profiles.id")` string references in SQLAlchemy model columns when the target model is defined with `schema="public"`. SQLAlchemy fails to resolve the table at flush time. The FK is already enforced at the database level by the migration — omit it from the ORM column definition and add a comment: `# FK enforced at DB level`.
+**Context:** `app/models/inventory.py`, `app/models/scans.py`, any model referencing cross-schema tables
 
 ### 2026-03-26 — shadcn v4 + Tailwind v3 CSS conflict in Next.js 14
 **Rule:** `create-next-app@14` installs Tailwind v3. `npx shadcn@latest init` installs shadcn v4 which generates Tailwind v4 syntax (`@import "shadcn/tailwind.css"`, `@import "tw-animate-css"`). These are incompatible with Tailwind v3. Fix: rewrite `globals.css` to use `@tailwind base/components/utilities` directives and HSL CSS variables, and update `tailwind.config.ts` with the full shadcn color token map. Do not use the shadcn v4 import syntax with Tailwind v3.
