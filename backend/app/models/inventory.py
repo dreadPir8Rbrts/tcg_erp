@@ -26,6 +26,8 @@ class VendorProfile(Base):
     trade_rate: Mapped[Optional[float]] = mapped_column(Numeric(4, 2), nullable=True)
     tcg_interests: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     notification_prefs: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    background_img: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    avatar_img: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     is_accounting_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 

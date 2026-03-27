@@ -12,17 +12,22 @@ Routes:
 import uuid
 from typing import Optional, List
 
+import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
 from app.models.inventory import InventoryItem, VendorProfile
 from app.models.profiles import Profile
-from app.models.catalog import Card
+from app.models.catalog import Card, Set, Serie
 from app.schemas.vendor import (
     InventoryItemCreate,
     InventoryItemResponse,
+    InventoryItemWithCardResponse,
     VendorProfileCreate,
     VendorProfileResponse,
     VendorProfileUpdate,
@@ -30,6 +35,19 @@ from app.schemas.vendor import (
 )
 
 router = APIRouter(tags=["vendor"])
+
+PROFILE_IMAGE_TYPES = {"background", "avatar"}
+PRESIGNED_URL_EXPIRY = 300  # seconds
+
+
+class ProfileImageUploadRequest(BaseModel):
+    image_type: str   # "background" or "avatar"
+    content_type: str = "image/jpeg"
+
+
+class ProfileImageUploadResponse(BaseModel):
+    upload_url: str
+    public_url: str
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +122,54 @@ def update_vendor_profile(
     return vendor
 
 
+@router.post("/vendor/profile/image", response_model=ProfileImageUploadResponse)
+def get_profile_image_upload_url(
+    body: ProfileImageUploadRequest,
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Generate a presigned S3 PUT URL for uploading a profile background or avatar image.
+    The client uploads directly to S3, then calls PATCH /vendor/profile with the public_url.
+    """
+    vendor = _get_vendor_or_404(profile, db)
+
+    if body.image_type not in PROFILE_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"image_type must be one of {PROFILE_IMAGE_TYPES}",
+        )
+
+    ext = body.content_type.split("/")[-1] if "/" in body.content_type else "jpg"
+    s3_key = f"profiles/{vendor.id}/{body.image_type}.{ext}"
+
+    s3 = boto3.client(
+        "s3",
+        region_name=settings.aws_region,
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        config=Config(signature_version="s3v4"),
+    )
+    try:
+        upload_url = s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": settings.aws_s3_bucket,
+                "Key": s3_key,
+                "ContentType": body.content_type,
+            },
+            ExpiresIn=PRESIGNED_URL_EXPIRY,
+        )
+    except ClientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate upload URL",
+        ) from exc
+
+    public_url = f"https://{settings.aws_s3_bucket}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+    return {"upload_url": upload_url, "public_url": public_url}
+
+
 # ---------------------------------------------------------------------------
 # Inventory
 # ---------------------------------------------------------------------------
@@ -146,22 +212,28 @@ def add_inventory_item(
     return item
 
 
-@router.get("/inventory", response_model=List[InventoryItemResponse])
+@router.get("/inventory", response_model=List[InventoryItemWithCardResponse])
 def list_inventory(
     condition: Optional[str] = Query(None),
     card_id: Optional[str] = Query(None),
     is_for_sale: Optional[bool] = Query(None),
     is_for_trade: Optional[bool] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
-) -> List[InventoryItem]:
+) -> List[dict]:
     vendor = _get_vendor_or_404(profile, db)
 
-    query = db.query(InventoryItem).filter(
-        InventoryItem.vendor_id == vendor.id,
-        InventoryItem.deleted_at.is_(None),
+    query = (
+        db.query(InventoryItem, Card, Set, Serie)
+        .join(Card, InventoryItem.card_id == Card.id)
+        .join(Set, Card.set_id == Set.id)
+        .join(Serie, Set.serie_id == Serie.id)
+        .filter(
+            InventoryItem.vendor_id == vendor.id,
+            InventoryItem.deleted_at.is_(None),
+        )
     )
 
     if condition:
@@ -173,4 +245,25 @@ def list_inventory(
     if is_for_trade is not None:
         query = query.filter(InventoryItem.is_for_trade == is_for_trade)
 
-    return query.order_by(InventoryItem.created_at.desc()).offset(offset).limit(limit).all()
+    rows = query.order_by(InventoryItem.created_at.desc()).offset(offset).limit(limit).all()
+
+    return [
+        {
+            "id": item.id,
+            "card_id": item.card_id,
+            "condition": item.condition,
+            "quantity": item.quantity,
+            "asking_price": item.asking_price,
+            "is_for_sale": item.is_for_sale,
+            "is_for_trade": item.is_for_trade,
+            "notes": item.notes,
+            "created_at": item.created_at,
+            "card_name": card.name,
+            "card_num": card.local_id,
+            "set_name": set_row.name,
+            "series_name": serie.name,
+            "image_url": card.image_url,
+            "rarity": card.rarity,
+        }
+        for item, card, set_row, serie in rows
+    ]

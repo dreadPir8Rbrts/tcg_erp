@@ -27,6 +27,8 @@ class VendorProfileUpdate(BaseModel):
     buying_rate: Optional[Decimal] = Field(None, ge=0, le=1)
     trade_rate: Optional[Decimal] = Field(None, ge=0, le=1)
     tcg_interests: Optional[List[str]] = None
+    background_img: Optional[str] = None
+    avatar_img: Optional[str] = None
 
 
 class VendorProfileResponse(BaseModel):
@@ -37,6 +39,8 @@ class VendorProfileResponse(BaseModel):
     buying_rate: Optional[Decimal]
     trade_rate: Optional[Decimal]
     tcg_interests: Optional[List[str]]
+    background_img: Optional[str]
+    avatar_img: Optional[str]
     is_accounting_enabled: bool
     created_at: datetime
 
@@ -85,5 +89,26 @@ class InventoryItemResponse(BaseModel):
     photo_url: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InventoryItemWithCardResponse(BaseModel):
+    id: str
+    card_id: str
+    condition: str
+    quantity: int
+    asking_price: Optional[Decimal]
+    is_for_sale: bool
+    is_for_trade: bool
+    notes: Optional[str]
+    created_at: datetime
+    # Card details
+    card_name: str
+    card_num: str
+    set_name: str
+    series_name: str
+    image_url: Optional[str]
+    rarity: Optional[str]
 
     model_config = {"from_attributes": True}
