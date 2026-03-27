@@ -1,29 +1,39 @@
 """
-Scan job endpoints — S3 presigned upload URL + job status polling + WebSocket push.
+Scan job endpoints.
 
 Routes:
-  POST /scans              — create scan job, return presigned S3 PUT URL
-  GET  /scans/{id}         — poll scan job status and result
-  WS   /scans/{id}/ws      — WebSocket: push completion event to vendor browser
+  POST /scans/identify     — direct Claude Vision identification (new fast path)
+  POST /scans              — legacy: create scan job + presigned S3 PUT URL
+  GET  /scans/{id}         — legacy: poll scan job status
+  WS   /scans/{id}/ws      — legacy: WebSocket push on completion
 """
 
+import base64
+import io
 import json
 import uuid
 import asyncio
 import logging
+from datetime import datetime
 from typing import Optional
 
+import anthropic
 import boto3
+import imagehash
+import redis.asyncio as aioredis
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from PIL import Image as PILImage
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import celery_app as _celery_module
 
-from app.db.session import get_db, settings
+from app.db.session import get_db, SessionLocal, settings
 from app.dependencies import get_current_profile
+from app.models.catalog import Card, Serie, Set
 from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
 from app.models.scans import ScanJob
@@ -32,6 +42,262 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["scans"])
 
 PRESIGNED_URL_EXPIRY = 300  # seconds
+
+# Prompt for the direct identify endpoint.
+# Instructs text-reading first to avoid artwork-based misidentification.
+_IDENTIFY_PROMPT = """Identify this Pokémon card by reading the text printed on it — do not guess from artwork alone.
+
+Step 1: Read the card name printed in large text (e.g. "Sealeo", "Pikachu", "Charizard VSTAR").
+Step 2: Read the card number printed at the bottom (e.g. "044/191", "4/102").
+Step 3: Read the set symbol or set name to determine the TCGdex set ID (e.g. swsh12, sv5, base1, sv8).
+
+Reply with JSON only, no other text:
+{"card_name":"","set_code":"","local_id":"","confidence":0.0}
+card_name is the exact name read from the card. set_code is the TCGdex set ID. local_id is the number before the slash (e.g. "044" from "044/191"). confidence is 0.0-1.0. If you cannot read the card clearly, return confidence 0.0."""
+
+_CACHE_TTL = 3600  # seconds
+
+
+# ---------------------------------------------------------------------------
+# Direct identify — async helpers
+# ---------------------------------------------------------------------------
+
+async def _cache_get(image_bytes: bytes, action: str) -> Optional[str]:
+    """Return cached card_id for this image+action, or None on miss/error."""
+    try:
+        img = PILImage.open(io.BytesIO(image_bytes))
+        phash = str(imagehash.phash(img))
+        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        async with r:
+            cached = await r.get(f"scan_cache:{phash}:{action}")
+        if cached:
+            return json.loads(cached).get("card_id")
+    except Exception as exc:
+        logger.warning("scan cache get failed: %s", exc)
+    return None
+
+
+async def _cache_set(image_bytes: bytes, action: str, card_id: str) -> None:
+    """Write card_id to Redis cache keyed on perceptual hash + action."""
+    try:
+        img = PILImage.open(io.BytesIO(image_bytes))
+        phash = str(imagehash.phash(img))
+        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        async with r:
+            await r.setex(f"scan_cache:{phash}:{action}", _CACHE_TTL, json.dumps({"card_id": card_id}))
+    except Exception as exc:
+        logger.warning("scan cache set failed: %s", exc)
+
+
+async def _call_claude(image_bytes: bytes) -> dict:
+    """Call Claude Vision async and return parsed JSON dict."""
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+    message = await client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=150,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
+                {"type": "text", "text": _IDENTIFY_PROMPT},
+            ],
+        }],
+    )
+    raw = message.content[0].text.strip()
+    logger.info("identify_card — Claude raw response: %r", raw)
+    # Strip markdown code fences if the model wrapped the JSON
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    return json.loads(raw)
+
+
+def _log_scan_sync(image_bytes: bytes, vendor_id: str, card_id: str, confidence: float, result_raw: dict, action: str) -> None:
+    """
+    Sync background task (runs in thread pool via FastAPI BackgroundTasks).
+    Uploads image to S3 and writes a completed scan_job log record to DB.
+    Does not block the HTTP response.
+    """
+    s3_key = f"scans/{vendor_id}/{uuid.uuid4()}.jpg"
+    try:
+        s3 = boto3.client(
+            "s3",
+            region_name=settings.aws_region,
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+        )
+        s3.put_object(Bucket=settings.aws_s3_bucket, Key=s3_key, Body=image_bytes, ContentType="image/jpeg")
+    except Exception as exc:
+        logger.warning("scan log — S3 upload failed: %s", exc)
+        s3_key = ""
+
+    db = SessionLocal()
+    try:
+        job = ScanJob(
+            id=str(uuid.uuid4()),
+            vendor_id=vendor_id,
+            image_s3_key=s3_key,
+            status="complete",
+            action=action,
+            result_card_id=card_id,
+            result_confidence=confidence,
+            result_raw=result_raw,
+            completed_at=datetime.utcnow(),
+        )
+        db.add(job)
+        db.commit()
+        logger.info("scan log written: card=%s confidence=%.2f", card_id, confidence)
+    except Exception as exc:
+        logger.warning("scan log — DB write failed: %s", exc)
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# POST /scans/identify  (new fast path)
+# ---------------------------------------------------------------------------
+
+class IdentifyResponse(BaseModel):
+    # Identification result
+    card_id: str
+    confidence: float
+    claude_card_name: Optional[str] = None  # name Claude read from the card (for debugging)
+    # Full card details — avoids a second GET /cards/{id} round-trip
+    name: str
+    card_num: str
+    category: str
+    rarity: Optional[str] = None
+    illustrator: Optional[str] = None
+    image_url: Optional[str] = None
+    variants: Optional[dict] = None
+    set_name: str
+    release_date: Optional[str] = None
+    series_name: str
+    series_logo_url: Optional[str] = None
+
+
+def _normalize_local_id(local_id: str) -> str:
+    """Strip leading zeros to match TCGdex storage (e.g. '044' → '44')."""
+    return local_id.lstrip("0") or "0"
+
+
+def _lookup_card_with_details(db: Session, card_id: Optional[str] = None, set_code: Optional[str] = None, local_id: Optional[str] = None) -> Optional[tuple]:
+    """Return (Card, Set, Serie) joined row by card_id OR set_code+local_id."""
+    q = db.query(Card, Set, Serie).join(Set, Card.set_id == Set.id).join(Serie, Set.serie_id == Serie.id)
+    if card_id:
+        return q.filter(Card.id == card_id).first()
+    # Try both the raw local_id and the leading-zero-stripped form
+    local_id_variants = list({local_id, _normalize_local_id(local_id)})
+    return q.filter(Card.set_id == set_code, Card.local_id.in_(local_id_variants)).first()
+
+
+def _build_identify_response(card: Card, set_row: Set, serie: Serie, confidence: float, claude_card_name: Optional[str] = None) -> dict:
+    return {
+        "card_id": card.id,
+        "confidence": confidence,
+        "claude_card_name": claude_card_name,
+        "name": card.name,
+        "card_num": card.local_id,
+        "category": card.category,
+        "rarity": card.rarity,
+        "illustrator": card.illustrator,
+        "image_url": card.image_url,
+        "variants": card.variants,
+        "set_name": set_row.name,
+        "release_date": str(set_row.release_date) if set_row.release_date else None,
+        "series_name": serie.name,
+        "series_logo_url": serie.logo_url,
+    }
+
+
+@router.post("/scans/identify", response_model=IdentifyResponse)
+async def identify_card(
+    background_tasks: BackgroundTasks,
+    image: UploadFile = File(...),
+    action: str = "add_inventory",
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Identify a card directly via Claude Vision — no queue, no WebSocket.
+    Image is compressed client-side before upload. S3 storage and DB logging
+    happen in the background after the response is returned.
+    """
+    if action not in VALID_ACTIONS:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid action '{action}'")
+
+    vendor = _get_vendor_or_404(profile, db)
+    image_bytes = await image.read()
+
+    # Cache check — instant return for repeat scans of the same card
+    cached_card_id = await _cache_get(image_bytes, action)
+    if cached_card_id:
+        logger.info("identify_card — cache hit: vendor=%s card=%s", vendor.id, cached_card_id)
+        row = _lookup_card_with_details(db, card_id=cached_card_id)
+        if row:
+            card, set_row, serie = row
+            background_tasks.add_task(_log_scan_sync, image_bytes, str(vendor.id), cached_card_id, 1.0, {"cached": True}, action)
+            return _build_identify_response(card, set_row, serie, 1.0)
+
+    # Call Claude
+    try:
+        result = await _call_claude(image_bytes)
+    except Exception as exc:
+        logger.error("identify_card — Claude error: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI service error — please try again")
+
+    confidence = float(result.get("confidence", 0.0))
+    logger.info(
+        "identify_card — Claude result: name=%r set_code=%r local_id=%r confidence=%.2f",
+        result.get("card_name"), result.get("set_code"), result.get("local_id"), confidence,
+    )
+    if confidence < 0.6:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Could not identify card (confidence {confidence:.2f}) — please search manually",
+        )
+
+    set_code = result.get("set_code", "")
+    local_id = result.get("local_id", "")
+    claude_card_name = result.get("card_name") or None
+    local_id_variants = list({local_id, _normalize_local_id(local_id)})
+
+    # Primary lookup: card_name + local_id — most reliable since Claude reads
+    # the large printed text. Avoids set_code→TCGdex mapping errors.
+    row = None
+    if claude_card_name and local_id:
+        row = (
+            db.query(Card, Set, Serie)
+            .join(Set, Card.set_id == Set.id)
+            .join(Serie, Set.serie_id == Serie.id)
+            .filter(
+                func.lower(Card.name) == claude_card_name.lower(),
+                Card.local_id.in_(local_id_variants),
+            )
+            .first()
+        )
+
+    # Fallback: set_code + local_id (used when name lookup misses)
+    if row is None:
+        logger.info("identify_card — name lookup miss (name=%r local_id=%r), trying set_code fallback: %s", claude_card_name, local_id, set_code)
+        row = _lookup_card_with_details(db, set_code=set_code, local_id=local_id)
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Card not found in catalog: {set_code}/{local_id} (name: {claude_card_name})",
+        )
+
+    card, set_row, serie = row
+
+    # Populate cache for repeat scans
+    await _cache_set(image_bytes, action, card.id)
+
+    background_tasks.add_task(_log_scan_sync, image_bytes, str(vendor.id), card.id, confidence, result, action)
+    return _build_identify_response(card, set_row, serie, confidence, claude_card_name)
 
 
 # ---------------------------------------------------------------------------

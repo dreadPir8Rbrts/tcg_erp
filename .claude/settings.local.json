@@ -13,7 +13,10 @@
       "mcp__supabase__list_projects",
       "mcp__supabase__execute_sql",
       "Bash(python -c \"from celery_app import app; print\\(''Registered tasks:'', list\\(app.tasks.keys\\(\\)\\)\\)\")",
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "Bash(pip index:*)",
+      "Bash(pip install:*)",
+      "Bash(.venv/bin/pip install:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
