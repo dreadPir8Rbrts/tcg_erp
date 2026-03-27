@@ -14,17 +14,19 @@ import logging
 from typing import Optional
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+import celery_app as _celery_module
 
 from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
 from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
 from app.models.scans import ScanJob
-from app.tasks.scan_pipeline import process_scan_job
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["scans"])
@@ -80,6 +82,7 @@ def _generate_presigned_put_url(s3_key: str, content_type: str) -> str:
         region_name=settings.aws_region,
         aws_access_key_id=settings.aws_access_key_id,
         aws_secret_access_key=settings.aws_secret_access_key,
+        config=Config(signature_version="s3v4"),
     )
     try:
         url = s3.generate_presigned_url(
@@ -157,7 +160,7 @@ def trigger_scan_job(
     if job.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Job already {job.status}")
 
-    process_scan_job.delay(scan_job_id)
+    _celery_module.app.send_task("scans.process_scan_job", args=[scan_job_id])
     return {"status": "queued", "scan_job_id": scan_job_id}
 
 
@@ -191,6 +194,7 @@ async def scan_job_websocket(
     await websocket.accept()
     try:
         while True:
+            db.expire_all()
             job = db.get(ScanJob, scan_job_id)
             if job is None:
                 await websocket.send_text(json.dumps({"error": "job not found"}))

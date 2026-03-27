@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import DateTime, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID, JSON
 
@@ -20,7 +20,7 @@ class ScanJob(Base):
     __table_args__ = {"schema": "public"}
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
-    vendor_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("public.vendor_profiles.id", ondelete="CASCADE"), nullable=False)
+    vendor_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)  # FK enforced at DB level
     image_s3_key: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     action: Mapped[str] = mapped_column(String, nullable=False)
