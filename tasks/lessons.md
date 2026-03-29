@@ -16,6 +16,26 @@
 
 ## CardOps-specific rules (always in force)
 
+### 2026-03-28 — Quick Scan failure mode shifted after OCR fixes
+**Rule:** After OCR parsing improvements, the dominant failure mode for Quick Scan shifted from `catalog_no_match` (OCR extracts wrong text) to `catalog_wrong_match` (OCR extracts correct name but wrong edition matched). Before fixing catalog matching, check the failure_reason breakdown — if `catalog_wrong_match` dominates, the problem is edition disambiguation, not parsing.
+**Context:** `app/services/ocr.py`, `app/services/catalog_match.py`, `scripts/analyze_failures.py`
+
+### 2026-03-28 — Quick Scan edition disambiguation is the current accuracy ceiling
+**Rule:** The remaining wrong matches share a pattern: correct card name + correct or absent local_id, but multiple sets contain the same card and the matcher picks the wrong edition. Available signals for disambiguation: `card_count_official` (pins the set if OCR reads the denominator cleanly), HP (works when cards differ in HP across editions), and era signals (not yet implemented). Tier 2b fuzzy name helps when names differ across candidates but not for identical reprints.
+**Context:** `app/services/catalog_match.py` Tier 2 + Tier 2b
+
+### 2026-03-28 — OCR parser: Pocket cards print stage + name on one line
+**Rule:** Pokémon TCG Pocket cards render "BASIC [name]" or "STAGE [name]" on a single line. The name parser must detect this inline-prefix pattern and extract the name from group 1, not treat the whole line as the name. Pattern: `^(?:BASIC|STAGE...)\s+(.+)$`.
+**Context:** `app/services/ocr.py` `_INLINE_PREFIX_PATTERN`
+
+### 2026-03-28 — OCR parser: old-format cards include level in name line
+**Rule:** DPt/Platinum era and older cards print the level on the card face adjacent to the name (e.g. "Aron x.15", "Bronzong LV.49", "Froslass .44"). Always strip ` LV.X`, ` x.X`, ` V.X`, ` .X` suffixes after extracting the name. The DB stores names without level indicators.
+**Context:** `app/services/ocr.py` `_strip_level_indicator()`
+
+### 2026-03-28 — Quick Scan gold set is ~36 cards, not ~42
+**Rule:** --generate-gold targets 2 cards per series (21 series = ~42 cards), but some cards in the gold set may lack `image_url` and are silently skipped by `load_gold_set()`. Actual gold set size will be slightly under target. This is expected — do not inflate the target to compensate.
+**Context:** `scripts/benchmark_scanners.py` `load_gold_set()`
+
 ### Always check the spec before schema decisions
 **Rule:** Before creating, modifying, or referencing any table or column, verify it exists in `CardOps-Project-Spec.md` Section 4. If it doesn't exist in the spec, stop and flag it.
 **Context:** All migrations, all model files
@@ -39,6 +59,42 @@
 ---
 
 ## Session corrections
+
+### 2026-03-27 — asyncio.create_task() is unreliable for background work in FastAPI
+**Rule:** Never use `asyncio.create_task()` inside a FastAPI route for background I/O that must complete reliably. If the event loop shuts down mid-task, the work is silently lost. Use FastAPI's `BackgroundTasks` parameter instead — it guarantees the task runs after the response is sent and is tracked by the framework.
+**Context:** `app/api/scans.py`, any route that needs post-response background work
+
+### 2026-03-27 — Do not set Content-Type when using FormData in fetch
+**Rule:** When posting `FormData` (file upload) via `fetch`, never manually set the `Content-Type` header. The browser must set it automatically to include the multipart boundary string. Setting it manually breaks the upload with a 400 or 422 error.
+**Context:** `frontend/lib/api.ts` `identifyCard()`, any multipart fetch call
+
+### 2026-03-27 — FastAPI UploadFile requires python-multipart
+**Rule:** Any FastAPI route that uses `UploadFile` or `File(...)` requires `python-multipart` to be installed. Without it, FastAPI raises `RuntimeError` at startup and the server fails to load. Add `python-multipart==x.x.x` to `requirements.txt`.
+**Context:** `backend/requirements.txt`, any route with file upload params
+
+### 2026-03-27 — logging.basicConfig required for app logger output in uvicorn
+**Rule:** uvicorn's `--log-level debug` only configures uvicorn's own loggers. Application `logging.getLogger(__name__)` calls are silent unless `logging.basicConfig(level=logging.INFO)` is called in `main.py` before the FastAPI app is created.
+**Context:** `backend/app/main.py`
+
+### 2026-03-27 — Claude Vision may return JSON wrapped in markdown code fences
+**Rule:** Claude models (especially newer versions) sometimes wrap JSON responses in ` ```json ... ``` ` code fences even when instructed not to. Always strip markdown fences before `json.loads()`. Pattern: if `raw.startswith("```")`, split on ` ``` `, drop the `json` tag, strip whitespace, then parse.
+**Context:** `app/api/scans.py` `_call_claude()`, any route that parses Claude JSON output
+
+### 2026-03-27 — max_tokens too low causes empty Claude response
+**Rule:** Setting `max_tokens` too aggressively low can cause Claude to return a truncated or empty response body (HTTP 200 but empty content), which causes `json.loads` to fail with `Expecting value: line 1 column 1`. Always set max_tokens with headroom above the expected response size. For the identify prompt (4 fields): use 150, not 100.
+**Context:** `app/api/scans.py` `_call_claude()`
+
+### 2026-03-27 — Physical card set code ≠ TCGdex set_id; use card name + number for lookup
+**Rule:** The set abbreviation printed on a physical card (e.g., "SSP") does not reliably map to the TCGdex `set_id` (e.g., "sv8"). Claude Vision reads the physical abbreviation. Never rely on Claude's set_code alone for catalog lookup. Use card_name + local_id as the primary DB lookup (both are printed clearly in large text). Keep set_code + local_id as a fallback only.
+**Context:** `app/api/scans.py` `identify_card()`
+
+### 2026-03-27 — TCGdex local_id strips leading zeros; physical card does not
+**Rule:** TCGdex stores card numbers without leading zeros (e.g., "44") but physical cards print them with padding (e.g., "044/191"). Claude reads the padded form. Always normalize by trying both the raw value and `lstrip("0")` form in DB queries. Use `Card.local_id.in_([local_id, local_id.lstrip("0") or "0"])`.
+**Context:** `app/api/scans.py` `_normalize_local_id()`, any lookup using Claude-provided local_id
+
+### 2026-03-27 — Redis phash cache serves stale wrong results after fixing misidentification
+**Rule:** After fixing a scan misidentification bug, always flush the scan cache before retesting: `redis-cli --scan --pattern "scan_cache:*" | xargs redis-cli DEL`. A cached wrong result will keep returning the incorrect card_id regardless of prompt or model changes.
+**Context:** Local dev, any time scan identification logic is changed
 
 ### 2026-03-27 — State variable name collision with React setter
 **Rule:** Never name a state variable with the same identifier as a React useState setter from another state declaration. E.g. `const [name, setName]` and `const [setName, setSetName]` in the same component causes a compile error. Use distinct names like `setQuery` for set-name search state.

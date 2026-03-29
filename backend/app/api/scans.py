@@ -43,17 +43,7 @@ router = APIRouter(tags=["scans"])
 
 PRESIGNED_URL_EXPIRY = 300  # seconds
 
-# Prompt for the direct identify endpoint.
-# Instructs text-reading first to avoid artwork-based misidentification.
-_IDENTIFY_PROMPT = """Identify this Pokémon card by reading the text printed on it — do not guess from artwork alone.
-
-Step 1: Read the card name printed in large text (e.g. "Sealeo", "Pikachu", "Charizard VSTAR").
-Step 2: Read the card number printed at the bottom (e.g. "044/191", "4/102").
-Step 3: Read the set symbol or set name to determine the TCGdex set ID (e.g. swsh12, sv5, base1, sv8).
-
-Reply with JSON only, no other text:
-{"card_name":"","set_code":"","local_id":"","confidence":0.0}
-card_name is the exact name read from the card. set_code is the TCGdex set ID. local_id is the number before the slash (e.g. "044" from "044/191"). confidence is 0.0-1.0. If you cannot read the card clearly, return confidence 0.0."""
+from app.services.claude_vision import call_claude as _call_claude_service
 
 _CACHE_TTL = 3600  # seconds
 
@@ -90,29 +80,8 @@ async def _cache_set(image_bytes: bytes, action: str, card_id: str) -> None:
 
 
 async def _call_claude(image_bytes: bytes) -> dict:
-    """Call Claude Vision async and return parsed JSON dict."""
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-    message = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=150,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
-                {"type": "text", "text": _IDENTIFY_PROMPT},
-            ],
-        }],
-    )
-    raw = message.content[0].text.strip()
-    logger.info("identify_card — Claude raw response: %r", raw)
-    # Strip markdown code fences if the model wrapped the JSON
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-    return json.loads(raw)
+    """Thin wrapper — delegates to the claude_vision service."""
+    return await _call_claude_service(image_bytes, media_type="image/jpeg")
 
 
 def _log_scan_sync(image_bytes: bytes, vendor_id: str, card_id: str, confidence: float, result_raw: dict, action: str) -> None:
@@ -478,3 +447,103 @@ async def scan_job_websocket(
             await asyncio.sleep(1)
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for scan_job %s", scan_job_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /scans/quick-identify  (Google Cloud Vision OCR fast path)
+# ---------------------------------------------------------------------------
+
+class QuickIdentifyResponse(BaseModel):
+    matched: bool
+    reason: Optional[str] = None          # populated when matched=False
+    confidence: Optional[float] = None
+    method: Optional[str] = None          # exact | local_id | local_id_hp | fuzzy_name
+    ocr: dict                              # raw OCR fields: name, set_number, ocr_num1, ocr_num2, hp, illustrator
+    # Full card details — same shape as IdentifyResponse card fields (populated when matched=True)
+    card_id: Optional[str] = None
+    name: Optional[str] = None
+    card_num: Optional[str] = None
+    category: Optional[str] = None
+    rarity: Optional[str] = None
+    illustrator: Optional[str] = None
+    image_url: Optional[str] = None
+    variants: Optional[dict] = None
+    set_name: Optional[str] = None
+    release_date: Optional[str] = None
+    series_name: Optional[str] = None
+    series_logo_url: Optional[str] = None
+
+
+@router.post("/scans/quick-identify", response_model=QuickIdentifyResponse)
+async def quick_identify(
+    image: UploadFile = File(...),
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Quick Scan: Google Cloud Vision OCR + fuzzy catalog match.
+    Faster than Claude Vision; no scan_job record or Celery task is created.
+    Returns the same card fields as /scans/identify so the frontend can reuse
+    the existing confirm → Add to Inventory flow on a successful match.
+    """
+    from app.services.ocr import extract_card_text
+    from app.services.catalog_match import match_card_from_ocr
+
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be an image")
+
+    image_bytes = await image.read()
+
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image must be under 10 MB")
+
+    try:
+        ocr_result = await extract_card_text(image_bytes)
+    except RuntimeError as exc:
+        logger.error("quick_identify — OCR error: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"OCR service error — please try again")
+
+    logger.info(
+        "quick_identify — OCR result: name=%r set_number=%r ocr_num1=%r ocr_num2=%r hp=%r",
+        ocr_result.get("name"), ocr_result.get("set_number"),
+        ocr_result.get("ocr_num1"), ocr_result.get("ocr_num2"), ocr_result.get("hp"),
+    )
+
+    if not ocr_result.get("name") and not ocr_result.get("set_number"):
+        return {"matched": False, "reason": "no_text_detected", "ocr": ocr_result}
+
+    match = await asyncio.to_thread(match_card_from_ocr, ocr_result, db)
+
+    if not match:
+        logger.info("quick_identify — no catalog match for OCR: %s", ocr_result)
+        return {"matched": False, "reason": "no_catalog_match", "ocr": ocr_result}
+
+    card: Card = match["card"]
+    set_row: Set = match["set"]
+    serie: Serie = match["serie"]
+    confidence: float = match["confidence"]
+    method: str = match["method"]
+
+    logger.info(
+        "quick_identify — matched: card=%s confidence=%.2f method=%s",
+        card.id, confidence, method,
+    )
+
+    return {
+        "matched": True,
+        "confidence": confidence,
+        "method": method,
+        "ocr": ocr_result,
+        "card_id": card.id,
+        "name": card.name,
+        "card_num": card.local_id,
+        "category": card.category,
+        "rarity": card.rarity,
+        "illustrator": card.illustrator,
+        "image_url": card.image_url,
+        "variants": card.variants,
+        "set_name": set_row.name,
+        "release_date": str(set_row.release_date) if set_row.release_date else None,
+        "series_name": serie.name,
+        "series_logo_url": serie.logo_url,
+    }
