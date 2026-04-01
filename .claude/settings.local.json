@@ -19,7 +19,8 @@
       "Bash(pip install:*)",
       "Bash(.venv/bin/pip install:*)",
       "Bash(python -c \"from google.cloud import vision; print\\(''Vision SDK OK''\\)\")",
-      "Bash(source /Users/jobo/Desktop/pokemon_ERP_v0/backend/.venv/bin/activate)"
+      "Bash(source /Users/jobo/Desktop/pokemon_ERP_v0/backend/.venv/bin/activate)",
+      "WebFetch(domain:www.pokedata.io)"
     ]
   },
   "enableAllProjectMcpServers": true,
