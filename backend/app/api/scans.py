@@ -84,13 +84,13 @@ async def _call_claude(image_bytes: bytes) -> dict:
     return await _call_claude_service(image_bytes, media_type="image/jpeg")
 
 
-def _log_scan_sync(image_bytes: bytes, vendor_id: str, card_id: str, confidence: float, result_raw: dict, action: str) -> None:
+def _log_scan_sync(image_bytes: bytes, profile_id: str, card_id: str, confidence: float, result_raw: dict, action: str) -> None:
     """
     Sync background task (runs in thread pool via FastAPI BackgroundTasks).
     Uploads image to S3 and writes a completed scan_job log record to DB.
     Does not block the HTTP response.
     """
-    s3_key = f"scans/{vendor_id}/{uuid.uuid4()}.jpg"
+    s3_key = f"scans/{profile_id}/{uuid.uuid4()}.jpg"
     try:
         s3 = boto3.client(
             "s3",
@@ -101,13 +101,14 @@ def _log_scan_sync(image_bytes: bytes, vendor_id: str, card_id: str, confidence:
         s3.put_object(Bucket=settings.aws_s3_bucket, Key=s3_key, Body=image_bytes, ContentType="image/jpeg")
     except Exception as exc:
         logger.warning("scan log — S3 upload failed: %s", exc)
-        s3_key = ""
+        s3_key = None
 
     db = SessionLocal()
     try:
         job = ScanJob(
             id=str(uuid.uuid4()),
-            vendor_id=vendor_id,
+            profile_id=profile_id,
+            scan_method="full_scan",
             image_s3_key=s3_key,
             status="complete",
             action=action,
@@ -198,17 +199,17 @@ async def identify_card(
     if action not in VALID_ACTIONS:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid action '{action}'")
 
-    vendor = _get_vendor_or_404(profile, db)
+    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
     image_bytes = await image.read()
 
     # Cache check — instant return for repeat scans of the same card
     cached_card_id = await _cache_get(image_bytes, action)
     if cached_card_id:
-        logger.info("identify_card — cache hit: vendor=%s card=%s", vendor.id, cached_card_id)
+        logger.info("identify_card — cache hit: profile=%s card=%s", profile.id, cached_card_id)
         row = _lookup_card_with_details(db, card_id=cached_card_id)
         if row:
             card, set_row, serie = row
-            background_tasks.add_task(_log_scan_sync, image_bytes, str(vendor.id), cached_card_id, 1.0, {"cached": True}, action)
+            background_tasks.add_task(_log_scan_sync, image_bytes, str(profile.id), cached_card_id, 1.0, {"cached": True}, action)
             return _build_identify_response(card, set_row, serie, 1.0)
 
     # Call Claude
@@ -265,7 +266,7 @@ async def identify_card(
     # Populate cache for repeat scans
     await _cache_set(image_bytes, action, card.id)
 
-    background_tasks.add_task(_log_scan_sync, image_bytes, str(vendor.id), card.id, confidence, result, action)
+    background_tasks.add_task(_log_scan_sync, image_bytes, str(profile.id), card.id, confidence, result, action)
     return _build_identify_response(card, set_row, serie, confidence, claude_card_name)
 
 
@@ -274,7 +275,7 @@ async def identify_card(
 # ---------------------------------------------------------------------------
 
 class ScanJobCreate(BaseModel):
-    action: str  # add_inventory | log_sale | log_trade_out | log_trade_in
+    action: str  # add_inventory | log_sale | log_purchase | log_trade
     content_type: str = "image/jpeg"  # MIME type of the image to be uploaded
 
 
@@ -295,7 +296,7 @@ class ScanJobResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-VALID_ACTIONS = {"add_inventory", "log_sale", "log_trade_out", "log_trade_in"}
+VALID_ACTIONS = {"add_inventory", "log_sale", "log_purchase", "log_trade"}
 
 
 def _get_vendor_or_404(profile: Profile, db: Session) -> VendorProfile:
@@ -352,15 +353,16 @@ def create_scan_job(
     if body.action not in VALID_ACTIONS:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid action '{body.action}'")
 
-    vendor = _get_vendor_or_404(profile, db)
+    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
     job_id = str(uuid.uuid4())
-    s3_key = f"scans/{vendor.id}/{job_id}.jpg"
+    s3_key = f"scans/{profile.id}/{job_id}.jpg"
 
     upload_url = _generate_presigned_put_url(s3_key, body.content_type)
 
     job = ScanJob(
         id=job_id,
-        vendor_id=vendor.id,
+        profile_id=profile.id,
+        scan_method="full_scan",
         image_s3_key=s3_key,
         status="pending",
         action=body.action,
@@ -387,10 +389,10 @@ def trigger_scan_job(
     Called by the client after the image has been uploaded to S3.
     Dispatches the Celery scan task.
     """
-    vendor = _get_vendor_or_404(profile, db)
+    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
     job = db.get(ScanJob, scan_job_id)
 
-    if job is None or job.vendor_id != vendor.id:
+    if job is None or job.profile_id != profile.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan job not found")
     if job.status != "pending":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Job already {job.status}")
@@ -406,10 +408,10 @@ def get_scan_job(
     db: Session = Depends(get_db),
 ) -> ScanJob:
     """Poll scan job status and result."""
-    vendor = _get_vendor_or_404(profile, db)
+    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
     job = db.get(ScanJob, scan_job_id)
 
-    if job is None or job.vendor_id != vendor.id:
+    if job is None or job.profile_id != profile.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan job not found")
 
     return job

@@ -14,33 +14,23 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 class VendorProfileCreate(BaseModel):
-    display_name: str = Field(..., min_length=1, max_length=100)
     bio: Optional[str] = None
     buying_rate: Optional[Decimal] = Field(None, ge=0, le=1)
     trade_rate: Optional[Decimal] = Field(None, ge=0, le=1)
-    tcg_interests: Optional[List[str]] = None
 
 
 class VendorProfileUpdate(BaseModel):
-    display_name: Optional[str] = Field(None, min_length=1, max_length=100)
     bio: Optional[str] = None
     buying_rate: Optional[Decimal] = Field(None, ge=0, le=1)
     trade_rate: Optional[Decimal] = Field(None, ge=0, le=1)
-    tcg_interests: Optional[List[str]] = None
-    background_img: Optional[str] = None
-    avatar_img: Optional[str] = None
 
 
 class VendorProfileResponse(BaseModel):
     id: str
     profile_id: str
-    display_name: str
     bio: Optional[str]
     buying_rate: Optional[Decimal]
     trade_rate: Optional[Decimal]
-    tcg_interests: Optional[List[str]]
-    background_img: Optional[str]
-    avatar_img: Optional[str]
     is_accounting_enabled: bool
     created_at: datetime
 
@@ -52,11 +42,10 @@ class VendorProfileResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 VALID_CONDITIONS = {
-    "psa_1","psa_2","psa_3","psa_4","psa_5","psa_6","psa_7","psa_8","psa_9","psa_10",
-    "bgs_1","bgs_2","bgs_3","bgs_4","bgs_5","bgs_6","bgs_7","bgs_8","bgs_9","bgs_10",
-    "cgc_1","cgc_2","cgc_3","cgc_4","cgc_5","cgc_6","cgc_7","cgc_8","cgc_9","cgc_10",
-    "sgc_1","sgc_2","sgc_3","sgc_4","sgc_5","sgc_6","sgc_7","sgc_8","sgc_9","sgc_10",
-    "raw_nm","raw_lp","raw_mp","raw_hp","raw_dmg",
+    "nm", "lp", "mp", "hp", "dmg",
+    "psa_7", "psa_8", "psa_9", "psa_10",
+    "bgs_9", "bgs_9_5", "bgs_10",
+    "cgc_9", "cgc_9_5", "cgc_10",
 }
 
 
@@ -75,7 +64,7 @@ class InventoryItemCreate(BaseModel):
 
 class InventoryItemResponse(BaseModel):
     id: str
-    vendor_id: str
+    profile_id: str
     card_id: str
     condition: str
     grading_service: Optional[str]

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
-from app.models.inventory import InventoryItem, VendorProfile
+from app.models.inventory import VendorInventory, VendorProfile
 from app.models.profiles import Profile
 from app.models.catalog import Card, Set, Serie
 from app.schemas.vendor import (
@@ -86,11 +86,9 @@ def create_vendor_profile(
     vendor = VendorProfile(
         id=str(uuid.uuid4()),
         profile_id=profile.id,
-        display_name=body.display_name,
         bio=body.bio,
         buying_rate=body.buying_rate,
         trade_rate=body.trade_rate,
-        tcg_interests=body.tcg_interests,
     )
     db.add(vendor)
     db.commit()
@@ -179,8 +177,8 @@ def add_inventory_item(
     body: InventoryItemCreate,
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
-) -> InventoryItem:
-    vendor = _get_vendor_or_404(profile, db)
+) -> VendorInventory:
+    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
 
     if body.condition not in VALID_CONDITIONS:
         raise HTTPException(
@@ -192,9 +190,9 @@ def add_inventory_item(
     if card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Card '{body.card_id}' not found")
 
-    item = InventoryItem(
+    item = VendorInventory(
         id=str(uuid.uuid4()),
-        vendor_id=vendor.id,
+        profile_id=profile.id,
         card_id=body.card_id,
         condition=body.condition,
         grading_service=body.grading_service,
@@ -223,29 +221,29 @@ def list_inventory(
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> List[dict]:
-    vendor = _get_vendor_or_404(profile, db)
+    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
 
     query = (
-        db.query(InventoryItem, Card, Set, Serie)
-        .join(Card, InventoryItem.card_id == Card.id)
+        db.query(VendorInventory, Card, Set, Serie)
+        .join(Card, VendorInventory.card_id == Card.id)
         .join(Set, Card.set_id == Set.id)
         .join(Serie, Set.serie_id == Serie.id)
         .filter(
-            InventoryItem.vendor_id == vendor.id,
-            InventoryItem.deleted_at.is_(None),
+            VendorInventory.profile_id == profile.id,
+            VendorInventory.deleted_at.is_(None),
         )
     )
 
     if condition:
-        query = query.filter(InventoryItem.condition == condition)
+        query = query.filter(VendorInventory.condition == condition)
     if card_id:
-        query = query.filter(InventoryItem.card_id == card_id)
+        query = query.filter(VendorInventory.card_id == card_id)
     if is_for_sale is not None:
-        query = query.filter(InventoryItem.is_for_sale == is_for_sale)
+        query = query.filter(VendorInventory.is_for_sale == is_for_sale)
     if is_for_trade is not None:
-        query = query.filter(InventoryItem.is_for_trade == is_for_trade)
+        query = query.filter(VendorInventory.is_for_trade == is_for_trade)
 
-    rows = query.order_by(InventoryItem.created_at.desc()).offset(offset).limit(limit).all()
+    rows = query.order_by(VendorInventory.created_at.desc()).offset(offset).limit(limit).all()
 
     return [
         {
