@@ -1,5 +1,8 @@
+import base64
+import json
 from typing import Optional
 
+from google.oauth2 import service_account
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from pydantic_settings import BaseSettings
@@ -19,8 +22,19 @@ class Settings(BaseSettings):
     aws_s3_bucket: Optional[str] = None
     aws_region: str = "us-east-1"
     anthropic_api_key: Optional[str] = None
+    google_credentials_base64: str = ""
 
     model_config = {"env_file": ".env"}
+
+    @property
+    def google_vision_credentials(self) -> Optional[service_account.Credentials]:
+        if not self.google_credentials_base64:
+            return None
+        key_data = json.loads(base64.b64decode(self.google_credentials_base64))
+        return service_account.Credentials.from_service_account_info(
+            key_data,
+            scopes=["https://www.googleapis.com/auth/cloud-vision"],
+        )
 
 
 settings = Settings()

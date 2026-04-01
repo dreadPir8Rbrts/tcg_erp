@@ -10,14 +10,18 @@ Never retry automatically — vendor is prompted to scan again or search manuall
 """
 
 import base64
+import io
+import json
 import logging
-import uuid
 from datetime import datetime
 from typing import Optional
 
 import boto3
 import anthropic
+import imagehash
+import redis
 from celery import shared_task
+from PIL import Image
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, settings
@@ -26,17 +30,24 @@ from app.models.catalog import Card
 
 logger = logging.getLogger(__name__)
 
-# Locked prompt — do not deviate from this (per spec)
-CARD_IDENTIFICATION_PROMPT = """Identify this Pokémon card. Return only valid JSON with no other text:
-{
-  "card_name": "string",
-  "set_name": "string",
-  "set_code": "string (e.g. swsh3, base1)",
-  "local_id": "string (card number within set, e.g. 136, 4)",
-  "condition_estimate": "nm|lp|mp|hp|dmg",
-  "confidence": 0.0-1.0
-}
-If you cannot identify the card with confidence >= 0.6, return {"confidence": 0.0}."""
+# Tightened prompt — only the fields needed for catalog lookup.
+# Deliberately overrides the CLAUDE.md locked prompt per user request (2026-03-27).
+# card_name / set_name / condition_estimate removed; they are redundant or set manually by vendor.
+CARD_IDENTIFICATION_PROMPT = """Identify this Pokémon card. Reply with JSON only, no other text:
+{"set_code":"","local_id":"","confidence":0.0}
+set_code is the TCGdex set ID (e.g. swsh3, base1). local_id is the card number within the set. confidence is 0.0-1.0. If unsure, return confidence 0.0."""
+
+_CACHE_TTL = 3600  # seconds
+
+
+def _redis_client() -> redis.Redis:
+    return redis.from_url(settings.redis_url, decode_responses=True)
+
+
+def _image_phash(image_bytes: bytes) -> str:
+    """Return the perceptual hash hex string for image bytes."""
+    img = Image.open(io.BytesIO(image_bytes))
+    return str(imagehash.phash(img))
 
 
 def _fetch_image_from_s3(s3_key: str) -> bytes:
@@ -58,7 +69,7 @@ def _call_claude(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=256,
+        max_tokens=100,
         messages=[
             {
                 "role": "user",
@@ -80,7 +91,6 @@ def _call_claude(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
         ],
     )
 
-    import json
     raw_text = message.content[0].text.strip()
     return json.loads(raw_text)
 
@@ -132,6 +142,30 @@ def process_scan_job(scan_job_id: str) -> dict:
             db.commit()
             return {"status": "failed"}
 
+        # Check Redis perceptual hash cache before calling Claude.
+        # Cache key includes action so add_inventory / log_sale don't collide.
+        cache_key = None
+        cached_card_id = None
+        try:
+            r = _redis_client()
+            phash = _image_phash(image_bytes)
+            cache_key = f"scan_cache:{phash}:{job.action}"
+            cached = r.get(cache_key)
+            if cached:
+                cached_data = json.loads(cached)
+                cached_card_id = cached_data.get("card_id")
+                logger.info("scan_job %s — cache hit for phash %s", scan_job_id, phash)
+        except Exception as exc:
+            logger.warning("scan_job %s — cache lookup failed (continuing): %s", scan_job_id, exc)
+
+        if cached_card_id:
+            job.result_card_id = cached_card_id
+            job.result_confidence = 1.0
+            job.status = "complete"
+            job.completed_at = datetime.utcnow()
+            db.commit()
+            return {"status": "complete", "result_card_id": cached_card_id}
+
         # Call Claude
         try:
             result = _call_claude(image_bytes)
@@ -156,6 +190,12 @@ def process_scan_job(scan_job_id: str) -> dict:
                 job.result_card_id = matched_id
                 job.status = "complete"
                 logger.info("scan_job %s — matched card %s (confidence %.2f)", scan_job_id, matched_id, confidence)
+                # Populate cache for repeat scans of the same card
+                if cache_key:
+                    try:
+                        r.setex(cache_key, _CACHE_TTL, json.dumps({"card_id": matched_id}))
+                    except Exception as exc:
+                        logger.warning("scan_job %s — cache write failed: %s", scan_job_id, exc)
             else:
                 job.status = "failed"
                 job.error_message = f"Card not found in catalog: set_code={set_code}, local_id={local_id}"

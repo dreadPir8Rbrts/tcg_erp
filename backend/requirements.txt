@@ -13,3 +13,10 @@ httpx==0.28.1
 python-jose[cryptography]==3.3.0
 boto3==1.35.99
 anthropic==0.40.0
+Pillow==11.3.0
+imagehash==4.3.2
+python-multipart==0.0.20
+google-cloud-vision==3.13.0
+google-auth==2.28.0
+rapidfuzz==3.6.1
+protobuf==6.33.6
