@@ -114,7 +114,7 @@ def match_card_from_ocr(ocr: Dict[str, Any], db: Session) -> Optional[Dict[str, 
             .join(Set, Card.set_id == Set.id)
             .join(Serie, Set.serie_id == Serie.id)
             .filter(Card.name.ilike(f"%{name}%"))
-            .limit(50)
+            .limit(10)
             .all()
         )
 
@@ -122,58 +122,12 @@ def match_card_from_ocr(ocr: Dict[str, Any], db: Session) -> Optional[Dict[str, 
             candidate_names = [r[0].name for r in rows]
             best = process.extractOne(name, candidate_names, scorer=fuzz.token_sort_ratio)
             if best and best[1] >= 80:
-                best_score = best[1]
-                # Collect all candidates at or near the best score (within 5 points)
-                top_candidates: List[tuple] = [
-                    (i, fuzz.token_sort_ratio(name, r[0].name), r)
-                    for i, r in enumerate(rows)
-                    if fuzz.token_sort_ratio(name, r[0].name) >= best_score - 5
-                ]
-
-                if len(top_candidates) == 1:
-                    idx, score, _ = top_candidates[0]
-                    return {
-                        "card": rows[idx][0],
-                        "set": rows[idx][1],
-                        "serie": rows[idx][2],
-                        "confidence": round(score / 100, 2),
-                        "method": "fuzzy_name",
-                    }
-
-                # Multiple candidates near the top score — use HP to disambiguate
-                if hp is not None:
-                    hp_top: List[tuple] = [
-                        (i, score, r) for i, score, r in top_candidates if r[0].hp == hp
-                    ]
-                    if len(hp_top) == 1:
-                        idx, score, _ = hp_top[0]
-                        return {
-                            "card": rows[idx][0],
-                            "set": rows[idx][1],
-                            "serie": rows[idx][2],
-                            "confidence": round(min(score / 100 + 0.05, 0.99), 2),
-                            "method": "fuzzy_name_hp",
-                        }
-                    # Multiple HP matches — pick highest fuzzy score among HP matches
-                    if len(hp_top) > 1:
-                        hp_top_sorted = sorted(hp_top, key=lambda x: x[1], reverse=True)
-                        idx, score, _ = hp_top_sorted[0]
-                        return {
-                            "card": rows[idx][0],
-                            "set": rows[idx][1],
-                            "serie": rows[idx][2],
-                            "confidence": round(score / 100, 2),
-                            "method": "fuzzy_name_hp_best",
-                        }
-
-                # No HP info or HP didn't disambiguate — pick the single highest scorer
-                top_candidates_sorted = sorted(top_candidates, key=lambda x: x[1], reverse=True)
-                idx, score, _ = top_candidates_sorted[0]
+                idx = candidate_names.index(best[0])
                 return {
                     "card": rows[idx][0],
                     "set": rows[idx][1],
                     "serie": rows[idx][2],
-                    "confidence": round(score / 100, 2),
+                    "confidence": round(best[1] / 100, 2),
                     "method": "fuzzy_name",
                 }
 
