@@ -1,10 +1,13 @@
 """
-Fuzzy matching service: maps OCR-extracted card text to a card in the catalog.
-Uses the existing GIN trigram index on cards.name for fast name search,
-and rapidfuzz for re-ranking candidates.
+Fuzzy matching service: maps OCR-extracted card text to a card in cards_v2.
+
+Pokémon-only (game='pokemon') — all queries filter on game to avoid cross-game
+collisions. One Piece scan support is deferred to a future iteration.
 
 All functions are synchronous (psycopg2/SQLAlchemy sync). Call from async
 routes via asyncio.to_thread().
+
+Returns dicts with keys: card (CardV2), expansion (ExpansionV2), confidence (float), method (str).
 """
 
 from typing import Optional, Dict, Any, List
@@ -13,19 +16,19 @@ from rapidfuzz import fuzz, process
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Card, Set, Serie
+from app.models.catalog_v2 import CardV2, ExpansionV2
 
 
 def match_card_from_ocr(ocr: Dict[str, Any], db: Session) -> Optional[Dict[str, Any]]:
     """
-    Attempt to identify a card from OCR-extracted fields.
-    Returns {"card": Card, "set": Set, "serie": Serie, "confidence": float, "method": str}
+    Attempt to identify a Pokémon card from OCR-extracted fields.
+    Returns {"card": CardV2, "expansion": ExpansionV2, "confidence": float, "method": str}
     or None if no confident match is found.
 
     Matching strategy (tries each tier, returns on first confident match):
       Tier 1: name + local_id exact match  → confidence 0.99
       Tier 2: local_id only (unique)       → confidence 0.90
-      Tier 3: local_id + hp disambiguation  → confidence 0.88
+      Tier 3: local_id + hp disambiguation → confidence 0.88
       Tier 4: fuzzy name match             → confidence varies (min 0.80)
     """
     name: str = (ocr.get("name") or "").strip()
@@ -35,57 +38,56 @@ def match_card_from_ocr(ocr: Dict[str, Any], db: Session) -> Optional[Dict[str, 
     local_id_variants = _local_id_variants(set_number) if set_number else []
     card_count = _parse_card_count(set_number) if set_number else None  # e.g. 131 from "029/131"
 
-    # Tier 1: name + local_id (+ card_count to pin the set when multiple editions share the name/number)
+    # Tier 1: name + local_id (+ card_count to pin the expansion when multiple editions share the name/number)
     if name and local_id_variants:
         q = (
-            db.query(Card, Set, Serie)
-            .join(Set, Card.set_id == Set.id)
-            .join(Serie, Set.serie_id == Serie.id)
+            db.query(CardV2, ExpansionV2)
+            .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
             .filter(
-                func.lower(Card.name) == name.lower(),
-                Card.local_id.in_(local_id_variants),
+                func.lower(CardV2.name) == name.lower(),
+                CardV2.number.in_(local_id_variants),
+                CardV2.game == "pokemon",
             )
         )
         if card_count is not None:
-            q = q.filter(Set.card_count_official == card_count)
+            q = q.filter(ExpansionV2.total == card_count)
         row = q.first()
         if row:
-            return {"card": row[0], "set": row[1], "serie": row[2], "confidence": 0.99, "method": "exact"}
+            return {"card": row[0], "expansion": row[1], "confidence": 0.99, "method": "exact"}
 
-        # Retry Tier 1 without card_count filter in case card_count_official isn't populated
+        # Retry Tier 1 without card_count filter in case total isn't populated
         if card_count is not None:
             row = (
-                db.query(Card, Set, Serie)
-                .join(Set, Card.set_id == Set.id)
-                .join(Serie, Set.serie_id == Serie.id)
+                db.query(CardV2, ExpansionV2)
+                .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
                 .filter(
-                    func.lower(Card.name) == name.lower(),
-                    Card.local_id.in_(local_id_variants),
+                    func.lower(CardV2.name) == name.lower(),
+                    CardV2.number.in_(local_id_variants),
+                    CardV2.game == "pokemon",
                 )
                 .first()
             )
             if row:
-                return {"card": row[0], "set": row[1], "serie": row[2], "confidence": 0.95, "method": "exact_no_count"}
+                return {"card": row[0], "expansion": row[1], "confidence": 0.95, "method": "exact_no_count"}
 
-    # Tier 2 + 3: local_id only (+ card_count to narrow set), optionally disambiguate with HP
+    # Tier 2 + 3: local_id only (+ card_count to narrow expansion), optionally disambiguate with HP
     if local_id_variants:
         q = (
-            db.query(Card, Set, Serie)
-            .join(Set, Card.set_id == Set.id)
-            .join(Serie, Set.serie_id == Serie.id)
-            .filter(Card.local_id.in_(local_id_variants))
+            db.query(CardV2, ExpansionV2)
+            .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
+            .filter(
+                CardV2.number.in_(local_id_variants),
+                CardV2.game == "pokemon",
+            )
         )
         if card_count is not None:
-            q = q.filter(Set.card_count_official == card_count)
+            q = q.filter(ExpansionV2.total == card_count)
         rows = q.all()
 
         if len(rows) == 1:
-            return {"card": rows[0][0], "set": rows[0][1], "serie": rows[0][2], "confidence": 0.90, "method": "local_id"}
+            return {"card": rows[0][0], "expansion": rows[0][1], "confidence": 0.90, "method": "local_id"}
 
         # Tier 2b: multiple cards share local_id — use fuzzy name to pick the best match.
-        # Only fires when exactly one candidate scores >= 85 (clear winner). If two cards
-        # have the same name (e.g. two printings of "Paras"), scores tie and we fall through
-        # to HP disambiguation instead of returning an arbitrary result.
         if name and len(rows) > 1:
             scored: List[tuple] = [
                 (i, fuzz.token_sort_ratio(name, r[0].name))
@@ -96,24 +98,25 @@ def match_card_from_ocr(ocr: Dict[str, Any], db: Session) -> Optional[Dict[str, 
                 idx, score = high[0]
                 return {
                     "card": rows[idx][0],
-                    "set": rows[idx][1],
-                    "serie": rows[idx][2],
+                    "expansion": rows[idx][1],
                     "confidence": round(0.80 * score / 100, 2),
                     "method": "local_id_fuzzy_name",
                 }
 
         if hp and rows:
-            hp_matched = [r for r in rows if r[0].hp == hp]
+            hp_matched = [r for r in rows if r[0].hp == str(hp)]
             if len(hp_matched) == 1:
-                return {"card": hp_matched[0][0], "set": hp_matched[0][1], "serie": hp_matched[0][2], "confidence": 0.88, "method": "local_id_hp"}
+                return {"card": hp_matched[0][0], "expansion": hp_matched[0][1], "confidence": 0.88, "method": "local_id_hp"}
 
     # Tier 4: fuzzy name match
     if name and len(name) >= 3:
         rows = (
-            db.query(Card, Set, Serie)
-            .join(Set, Card.set_id == Set.id)
-            .join(Serie, Set.serie_id == Serie.id)
-            .filter(Card.name.ilike(f"%{name}%"))
+            db.query(CardV2, ExpansionV2)
+            .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
+            .filter(
+                CardV2.name.ilike(f"%{name}%"),
+                CardV2.game == "pokemon",
+            )
             .limit(50)
             .all()
         )
@@ -123,7 +126,6 @@ def match_card_from_ocr(ocr: Dict[str, Any], db: Session) -> Optional[Dict[str, 
             best = process.extractOne(name, candidate_names, scorer=fuzz.token_sort_ratio)
             if best and best[1] >= 80:
                 best_score = best[1]
-                # Collect all candidates at or near the best score (within 5 points)
                 top_candidates: List[tuple] = [
                     (i, fuzz.token_sort_ratio(name, r[0].name), r)
                     for i, r in enumerate(rows)
@@ -134,45 +136,40 @@ def match_card_from_ocr(ocr: Dict[str, Any], db: Session) -> Optional[Dict[str, 
                     idx, score, _ = top_candidates[0]
                     return {
                         "card": rows[idx][0],
-                        "set": rows[idx][1],
-                        "serie": rows[idx][2],
+                        "expansion": rows[idx][1],
                         "confidence": round(score / 100, 2),
                         "method": "fuzzy_name",
                     }
 
-                # Multiple candidates near the top score — use HP to disambiguate
+                # Multiple candidates — use HP to disambiguate
                 if hp is not None:
                     hp_top: List[tuple] = [
-                        (i, score, r) for i, score, r in top_candidates if r[0].hp == hp
+                        (i, score, r) for i, score, r in top_candidates if r[0].hp == str(hp)
                     ]
                     if len(hp_top) == 1:
                         idx, score, _ = hp_top[0]
                         return {
                             "card": rows[idx][0],
-                            "set": rows[idx][1],
-                            "serie": rows[idx][2],
+                            "expansion": rows[idx][1],
                             "confidence": round(min(score / 100 + 0.05, 0.99), 2),
                             "method": "fuzzy_name_hp",
                         }
-                    # Multiple HP matches — pick highest fuzzy score among HP matches
                     if len(hp_top) > 1:
                         hp_top_sorted = sorted(hp_top, key=lambda x: x[1], reverse=True)
                         idx, score, _ = hp_top_sorted[0]
                         return {
                             "card": rows[idx][0],
-                            "set": rows[idx][1],
-                            "serie": rows[idx][2],
+                            "expansion": rows[idx][1],
                             "confidence": round(score / 100, 2),
                             "method": "fuzzy_name_hp_best",
                         }
 
-                # No HP info or HP didn't disambiguate — pick the single highest scorer
+                # No HP or HP didn't help — pick highest scorer
                 top_candidates_sorted = sorted(top_candidates, key=lambda x: x[1], reverse=True)
                 idx, score, _ = top_candidates_sorted[0]
                 return {
                     "card": rows[idx][0],
-                    "set": rows[idx][1],
-                    "serie": rows[idx][2],
+                    "expansion": rows[idx][1],
                     "confidence": round(score / 100, 2),
                     "method": "fuzzy_name",
                 }
@@ -185,7 +182,7 @@ def _parse_card_count(set_number: str) -> Optional[int]:
     Extract the total card count from a set number string.
     '029/131'  -> 131
     '044/1910' -> 191  (OCR noise: 4th digit is a stray character, truncate to 3)
-    'TG15/TG30' -> None (TG format doesn't map cleanly to card_count_official)
+    'TG15/TG30' -> None (TG format doesn't map cleanly to expansion total)
     """
     parts = set_number.split("/")
     if len(parts) < 2:
@@ -193,7 +190,6 @@ def _parse_card_count(set_number: str) -> Optional[int]:
     second = parts[1]
     if second.upper().startswith("TG"):
         return None
-    # Truncate 4-digit reads to 3 — OCR occasionally appends a stray character
     if len(second) == 4 and second.isdigit():
         second = second[:3]
     return int(second) if second.isdigit() else None

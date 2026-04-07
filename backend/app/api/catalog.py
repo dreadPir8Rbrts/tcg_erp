@@ -1,51 +1,99 @@
+"""
+Catalog endpoints — served from cards_v2 + expansions_v2 (V2 API sourced data).
+
+Routes:
+  GET /cards          — search cards by name, game, language, expansion
+  GET /cards/{id}     — card detail by UUID
+  GET /expansions     — list expansions, optionally filtered by game/language
+  GET /expansions/{id} — expansion detail with local card count
+"""
+
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.catalog import Card, Serie, Set
+from app.models.catalog_v2 import CardV2, ExpansionV2
 
 router = APIRouter(tags=["catalog"])
 
 
 # ---------------------------------------------------------------------------
-# Response schema
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _extract_image_url(images: Optional[list]) -> Optional[str]:
+    """Pull the small image URL from the V2 API images array (suitable for thumbnails)."""
+    if not images:
+        return None
+    if isinstance(images, list) and images:
+        return images[0].get("small") or images[0].get("large")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Response schemas
 # ---------------------------------------------------------------------------
 
 class CardDetailResponse(BaseModel):
     id: str
-    card_num: str
+    card_num: Optional[str] = None
     name: str
-    category: str
     rarity: Optional[str] = None
-    illustrator: Optional[str] = None
     image_url: Optional[str] = None
-    variants: Optional[dict] = None
     set_name: str
     release_date: Optional[str] = None
-    series_name: str
-    series_logo_url: Optional[str] = None
+    series_name: Optional[str] = None   # None for One Piece
+    game: str
+    language_code: str
 
     model_config = {"from_attributes": True}
 
 
-def _build_response(card: Card, set_row: Set, serie: Serie) -> dict:
+class ExpansionResponse(BaseModel):
+    id: str
+    external_id: str
+    game: str
+    name: str
+    series: Optional[str] = None
+    total: Optional[int] = None
+    language: str
+    language_code: str
+    release_date: Optional[str] = None
+    logo_url: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+def _build_card_response(card: CardV2, expansion: ExpansionV2) -> dict:
     return {
-        "id": card.id,
-        "card_num": card.local_id,
+        "id": str(card.id),
+        "card_num": card.number,
         "name": card.name,
-        "category": card.category,
         "rarity": card.rarity,
-        "illustrator": card.illustrator,
-        "image_url": card.image_url,
-        "variants": card.variants,
-        "set_name": set_row.name,
-        "release_date": str(set_row.release_date) if set_row.release_date else None,
-        "series_name": serie.name,
-        "series_logo_url": serie.logo_url,
+        "image_url": _extract_image_url(card.images),
+        "set_name": expansion.name,
+        "release_date": str(expansion.release_date) if expansion.release_date else None,
+        "series_name": expansion.series,
+        "game": card.game,
+        "language_code": card.language_code,
+    }
+
+
+def _build_expansion_response(expansion: ExpansionV2) -> dict:
+    return {
+        "id": str(expansion.id),
+        "external_id": expansion.external_id,
+        "game": expansion.game,
+        "name": expansion.name,
+        "series": expansion.series,
+        "total": expansion.total,
+        "language": expansion.language,
+        "language_code": expansion.language_code,
+        "release_date": str(expansion.release_date) if expansion.release_date else None,
+        "logo_url": expansion.logo_url,
     }
 
 
@@ -56,67 +104,69 @@ def _build_response(card: Card, set_row: Set, serie: Serie) -> dict:
 @router.get("/cards/{card_id}", response_model=CardDetailResponse)
 def get_card(card_id: str, db: Session = Depends(get_db)):
     row = (
-        db.query(Card, Set, Serie)
-        .join(Set, Card.set_id == Set.id)
-        .join(Serie, Set.serie_id == Serie.id)
-        .filter(Card.id == card_id)
+        db.query(CardV2, ExpansionV2)
+        .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
+        .filter(CardV2.id == card_id)
         .first()
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Card not found")
-    card, set_row, serie = row
-    return _build_response(card, set_row, serie)
+    card, expansion = row
+    return _build_card_response(card, expansion)
 
 
 @router.get("/cards", response_model=List[CardDetailResponse])
 def search_cards(
     name: Optional[str] = Query(None, min_length=2, description="Filter by card name (contains)"),
-    card_num: Optional[str] = Query(None, min_length=1, description="Filter by local_id within set"),
-    card_count: Optional[int] = Query(None, description="Filter by set card_count_official (the /NNN part of a set number)"),
-    set_name: Optional[str] = Query(None, min_length=2, description="Filter by set name (contains)"),
-    series_name: Optional[str] = Query(None, min_length=2, description="Filter by series name (contains)"),
+    card_num: Optional[str] = Query(None, min_length=1, description="Filter by card number within set"),
+    game: Optional[str] = Query(None, description="Filter by game: pokemon | onepiece"),
+    language_code: Optional[str] = Query(None, description="Filter by language code e.g. en, ja"),
+    set_name: Optional[str] = Query(None, min_length=2, description="Filter by expansion name (contains)"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    if not any([name, card_num, set_name, series_name]):
-        raise HTTPException(status_code=422, detail="At least one search parameter is required.")
+    if not any([name, card_num, set_name]):
+        raise HTTPException(status_code=422, detail="At least one of name, card_num, or set_name is required.")
 
     query = (
-        db.query(Card, Set, Serie)
-        .join(Set, Card.set_id == Set.id)
-        .join(Serie, Set.serie_id == Serie.id)
+        db.query(CardV2, ExpansionV2)
+        .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
     )
     if name:
-        query = query.filter(Card.name.ilike(f"%{name}%"))
+        query = query.filter(CardV2.name.ilike(f"%{name}%"))
     if card_num:
-        query = query.filter(Card.local_id.ilike(f"%{card_num}%"))
-    if card_count is not None:
-        query = query.filter(Set.card_count_official == card_count)
+        query = query.filter(CardV2.number.ilike(f"%{card_num}%"))
+    if game:
+        query = query.filter(CardV2.game == game)
+    if language_code:
+        query = query.filter(CardV2.language_code == language_code)
     if set_name:
-        query = query.filter(Set.name.ilike(f"%{set_name}%"))
-    if series_name:
-        query = query.filter(Serie.name.ilike(f"%{series_name}%"))
+        query = query.filter(ExpansionV2.name.ilike(f"%{set_name}%"))
 
-    rows = query.order_by(Card.name).offset(offset).limit(limit).all()
-    return [_build_response(card, set_row, serie) for card, set_row, serie in rows]
+    rows = query.order_by(CardV2.name).offset(offset).limit(limit).all()
+    return [_build_card_response(card, expansion) for card, expansion in rows]
 
 
-@router.get("/sets/{set_id}")
-def get_set(set_id: str, db: Session = Depends(get_db)):
-    set_row = db.get(Set, set_id)
-    if set_row is None:
-        raise HTTPException(status_code=404, detail="Set not found")
-    card_count = db.query(func.count(Card.id)).filter(Card.set_id == set_id).scalar()
-    return {**set_row.__dict__, "card_count_local": card_count}
+@router.get("/expansions/{expansion_id}", response_model=ExpansionResponse)
+def get_expansion(expansion_id: str, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    expansion = db.get(ExpansionV2, expansion_id)
+    if expansion is None:
+        raise HTTPException(status_code=404, detail="Expansion not found")
+    return _build_expansion_response(expansion)
 
 
-@router.get("/sets")
-def list_sets(
-    serie_id: Optional[str] = Query(None, description="Filter by serie id"),
+@router.get("/expansions", response_model=List[ExpansionResponse])
+def list_expansions(
+    game: Optional[str] = Query(None, description="Filter by game: pokemon | onepiece"),
+    language_code: Optional[str] = Query(None, description="Filter by language code e.g. en, ja"),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Set)
-    if serie_id:
-        query = query.filter(Set.serie_id == serie_id)
-    return query.order_by(Set.release_date.desc()).all()
+    query = db.query(ExpansionV2)
+    if game:
+        query = query.filter(ExpansionV2.game == game)
+    if language_code:
+        query = query.filter(ExpansionV2.language_code == language_code)
+    rows = query.order_by(ExpansionV2.release_date.desc().nullslast()).all()
+    return [_build_expansion_response(e) for e in rows]

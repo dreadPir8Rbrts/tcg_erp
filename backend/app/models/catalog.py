@@ -128,7 +128,8 @@ class PriceSnapshot(Base):
     __tablename__ = "price_snapshots"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    card_id = Column(String, ForeignKey("cards.id"), nullable=False)
+    card_id = Column(String, ForeignKey("cards.id"), nullable=True)   # legacy — superseded by card_v2_id
+    card_v2_id = Column(UUID(as_uuid=True), ForeignKey("public.cards_v2.id", ondelete="CASCADE"), nullable=True)
     source = Column(String, nullable=False)      # 'tcgplayer' | 'cardmarket'
     variant = Column(String, nullable=False)      # see PRICE_VARIANT_CHECK
     currency = Column(String, nullable=False)     # 'USD' | 'EUR'
@@ -151,12 +152,12 @@ class PriceSnapshot(Base):
     expires_at = Column(DateTime, nullable=False)  # fetched_at + 24h TTL
 
     __table_args__ = (
-        UniqueConstraint("card_id", "source", "variant", name="uq_price_snapshots_card_source_variant"),
+        UniqueConstraint("card_v2_id", "source", "variant", name="uq_price_snapshots_card_v2_source_variant"),
         CheckConstraint(
             "source IN ('tcgplayer', 'cardmarket')",
             name="price_snapshots_source_check",
         ),
         CheckConstraint(PRICE_VARIANT_CHECK, name="price_snapshots_variant_check"),
-        Index("ix_price_snapshots_card_id", "card_id"),
+        Index("ix_price_snapshots_card_v2_id", "card_v2_id"),
         Index("ix_price_snapshots_expires_at", "expires_at"),
     )

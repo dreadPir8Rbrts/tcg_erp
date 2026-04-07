@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, settings
 from app.models.scans import ScanJob
-from app.models.catalog import Card
+from app.models.catalog_v2 import CardV2, ExpansionV2
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +97,20 @@ def _call_claude(image_bytes: bytes, media_type: str = "image/jpeg") -> dict:
 
 def _match_card(db: Session, set_code: str, local_id: str) -> Optional[str]:
     """
-    Find the card ID in the local catalog by set_code + local_id.
-    Returns card.id (e.g. 'swsh3-136') or None if not found.
+    Find the card UUID in cards_v2 by expansion external_id + card number.
+    Pokémon-only. Returns str(card.id) or None if not found.
     """
-    card = db.query(Card).filter(
-        Card.set_id == set_code,
-        Card.local_id == local_id,
-    ).first()
-    return card.id if card else None
+    card = (
+        db.query(CardV2)
+        .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
+        .filter(
+            ExpansionV2.external_id == set_code,
+            CardV2.number == local_id,
+            CardV2.game == "pokemon",
+        )
+        .first()
+    )
+    return str(card.id) if card else None
 
 
 @shared_task(name="scans.process_scan_job")

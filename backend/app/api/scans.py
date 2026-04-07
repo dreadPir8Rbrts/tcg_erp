@@ -33,7 +33,7 @@ import celery_app as _celery_module
 
 from app.db.session import get_db, SessionLocal, settings
 from app.dependencies import get_current_profile
-from app.models.catalog import Card, Serie, Set
+from app.models.catalog_v2 import CardV2, ExpansionV2
 from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
 from app.models.scans import ScanJob
@@ -137,49 +137,71 @@ class IdentifyResponse(BaseModel):
     claude_card_name: Optional[str] = None  # name Claude read from the card (for debugging)
     # Full card details — avoids a second GET /cards/{id} round-trip
     name: str
-    card_num: str
-    category: str
+    card_num: Optional[str] = None
     rarity: Optional[str] = None
-    illustrator: Optional[str] = None
     image_url: Optional[str] = None
-    variants: Optional[dict] = None
     set_name: str
     release_date: Optional[str] = None
-    series_name: str
-    series_logo_url: Optional[str] = None
+    series_name: Optional[str] = None
+    game: str
+    language_code: str
 
 
 def _normalize_local_id(local_id: str) -> str:
-    """Strip leading zeros to match TCGdex storage (e.g. '044' → '44')."""
+    """Strip leading zeros (e.g. '044' → '44') to broaden catalog matches."""
     return local_id.lstrip("0") or "0"
 
 
-def _lookup_card_with_details(db: Session, card_id: Optional[str] = None, set_code: Optional[str] = None, local_id: Optional[str] = None) -> Optional[tuple]:
-    """Return (Card, Set, Serie) joined row by card_id OR set_code+local_id."""
-    q = db.query(Card, Set, Serie).join(Set, Card.set_id == Set.id).join(Serie, Set.serie_id == Serie.id)
+def _extract_image_url(images: Optional[list]) -> Optional[str]:
+    """Pull the small image URL from the V2 API images array (suitable for thumbnails)."""
+    if not images:
+        return None
+    if isinstance(images, list) and images:
+        return images[0].get("small") or images[0].get("large")
+    return None
+
+
+def _lookup_card_with_details(
+    db: Session,
+    card_id: Optional[str] = None,
+    set_code: Optional[str] = None,
+    local_id: Optional[str] = None,
+) -> Optional[tuple]:
+    """Return (CardV2, ExpansionV2) by card_id OR expansion external_id + card number.
+    Pokémon-only — set game filter when matching by set_code + local_id."""
+    q = (
+        db.query(CardV2, ExpansionV2)
+        .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
+    )
     if card_id:
-        return q.filter(Card.id == card_id).first()
-    # Try both the raw local_id and the leading-zero-stripped form
+        return q.filter(CardV2.id == card_id).first()
     local_id_variants = list({local_id, _normalize_local_id(local_id)})
-    return q.filter(Card.set_id == set_code, Card.local_id.in_(local_id_variants)).first()
+    return q.filter(
+        ExpansionV2.external_id == set_code,
+        CardV2.number.in_(local_id_variants),
+        CardV2.game == "pokemon",
+    ).first()
 
 
-def _build_identify_response(card: Card, set_row: Set, serie: Serie, confidence: float, claude_card_name: Optional[str] = None) -> dict:
+def _build_identify_response(
+    card: CardV2,
+    expansion: ExpansionV2,
+    confidence: float,
+    claude_card_name: Optional[str] = None,
+) -> dict:
     return {
-        "card_id": card.id,
+        "card_id": str(card.id),
         "confidence": confidence,
         "claude_card_name": claude_card_name,
         "name": card.name,
-        "card_num": card.local_id,
-        "category": card.category,
+        "card_num": card.number,
         "rarity": card.rarity,
-        "illustrator": card.illustrator,
-        "image_url": card.image_url,
-        "variants": card.variants,
-        "set_name": set_row.name,
-        "release_date": str(set_row.release_date) if set_row.release_date else None,
-        "series_name": serie.name,
-        "series_logo_url": serie.logo_url,
+        "image_url": _extract_image_url(card.images),
+        "set_name": expansion.name,
+        "release_date": str(expansion.release_date) if expansion.release_date else None,
+        "series_name": expansion.series,
+        "game": card.game,
+        "language_code": card.language_code,
     }
 
 
@@ -208,9 +230,9 @@ async def identify_card(
         logger.info("identify_card — cache hit: profile=%s card=%s", profile.id, cached_card_id)
         row = _lookup_card_with_details(db, card_id=cached_card_id)
         if row:
-            card, set_row, serie = row
+            card, expansion = row
             background_tasks.add_task(_log_scan_sync, image_bytes, str(profile.id), cached_card_id, 1.0, {"cached": True}, action)
-            return _build_identify_response(card, set_row, serie, 1.0)
+            return _build_identify_response(card, expansion, 1.0)
 
     # Call Claude
     try:
@@ -236,21 +258,21 @@ async def identify_card(
     local_id_variants = list({local_id, _normalize_local_id(local_id)})
 
     # Primary lookup: card_name + local_id — most reliable since Claude reads
-    # the large printed text. Avoids set_code→TCGdex mapping errors.
+    # the large printed text. Pokémon-only scan; filter to game='pokemon'.
     row = None
     if claude_card_name and local_id:
         row = (
-            db.query(Card, Set, Serie)
-            .join(Set, Card.set_id == Set.id)
-            .join(Serie, Set.serie_id == Serie.id)
+            db.query(CardV2, ExpansionV2)
+            .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
             .filter(
-                func.lower(Card.name) == claude_card_name.lower(),
-                Card.local_id.in_(local_id_variants),
+                func.lower(CardV2.name) == claude_card_name.lower(),
+                CardV2.number.in_(local_id_variants),
+                CardV2.game == "pokemon",
             )
             .first()
         )
 
-    # Fallback: set_code + local_id (used when name lookup misses)
+    # Fallback: expansion external_id + card number
     if row is None:
         logger.info("identify_card — name lookup miss (name=%r local_id=%r), trying set_code fallback: %s", claude_card_name, local_id, set_code)
         row = _lookup_card_with_details(db, set_code=set_code, local_id=local_id)
@@ -261,13 +283,13 @@ async def identify_card(
             detail=f"Card not found in catalog: {set_code}/{local_id} (name: {claude_card_name})",
         )
 
-    card, set_row, serie = row
+    card, expansion = row
 
     # Populate cache for repeat scans
-    await _cache_set(image_bytes, action, card.id)
+    await _cache_set(image_bytes, action, str(card.id))
 
-    background_tasks.add_task(_log_scan_sync, image_bytes, str(profile.id), card.id, confidence, result, action)
-    return _build_identify_response(card, set_row, serie, confidence, claude_card_name)
+    background_tasks.add_task(_log_scan_sync, image_bytes, str(profile.id), str(card.id), confidence, result, action)
+    return _build_identify_response(card, expansion, confidence, claude_card_name)
 
 
 # ---------------------------------------------------------------------------
@@ -465,15 +487,13 @@ class QuickIdentifyResponse(BaseModel):
     card_id: Optional[str] = None
     name: Optional[str] = None
     card_num: Optional[str] = None
-    category: Optional[str] = None
     rarity: Optional[str] = None
-    illustrator: Optional[str] = None
     image_url: Optional[str] = None
-    variants: Optional[dict] = None
     set_name: Optional[str] = None
     release_date: Optional[str] = None
     series_name: Optional[str] = None
-    series_logo_url: Optional[str] = None
+    game: Optional[str] = None
+    language_code: Optional[str] = None
 
 
 @router.post("/scans/quick-identify", response_model=QuickIdentifyResponse)
@@ -520,9 +540,8 @@ async def quick_identify(
         logger.info("quick_identify — no catalog match for OCR: %s", ocr_result)
         return {"matched": False, "reason": "no_catalog_match", "ocr": ocr_result}
 
-    card: Card = match["card"]
-    set_row: Set = match["set"]
-    serie: Serie = match["serie"]
+    card: CardV2 = match["card"]
+    expansion: ExpansionV2 = match["expansion"]
     confidence: float = match["confidence"]
     method: str = match["method"]
 
@@ -536,16 +555,14 @@ async def quick_identify(
         "confidence": confidence,
         "method": method,
         "ocr": ocr_result,
-        "card_id": card.id,
+        "card_id": str(card.id),
         "name": card.name,
-        "card_num": card.local_id,
-        "category": card.category,
+        "card_num": card.number,
         "rarity": card.rarity,
-        "illustrator": card.illustrator,
-        "image_url": card.image_url,
-        "variants": card.variants,
-        "set_name": set_row.name,
-        "release_date": str(set_row.release_date) if set_row.release_date else None,
-        "series_name": serie.name,
-        "series_logo_url": serie.logo_url,
+        "image_url": _extract_image_url(card.images),
+        "set_name": expansion.name,
+        "release_date": str(expansion.release_date) if expansion.release_date else None,
+        "series_name": expansion.series,
+        "game": card.game,
+        "language_code": card.language_code,
     }

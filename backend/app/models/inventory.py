@@ -43,7 +43,8 @@ class VendorInventory(Base):
         ForeignKey("public.profiles.id", ondelete="CASCADE"),
         nullable=False,
     )
-    card_id: Mapped[str] = mapped_column(String, nullable=False)  # FK enforced at DB level
+    card_id: Mapped[str] = mapped_column(String, nullable=True)   # legacy — kept for downgrade safety
+    card_v2_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), ForeignKey("public.cards_v2.id", ondelete="RESTRICT"), nullable=True)
     condition_type: Mapped[str] = mapped_column(String(10), nullable=False)
     condition_ungraded: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     grading_company: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)

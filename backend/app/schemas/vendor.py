@@ -122,12 +122,14 @@ class InventoryItemWithCardResponse(BaseModel):
     is_for_trade: bool
     notes: Optional[str]
     created_at: datetime
-    # Card details
+    # Card details from cards_v2 + expansions_v2
     card_name: str
-    card_num: str
+    card_num: Optional[str]
     set_name: str
-    series_name: str
+    series_name: Optional[str]   # None for One Piece
     image_url: Optional[str]
     rarity: Optional[str]
+    game: str
+    language_code: str
 
     model_config = {"from_attributes": True}

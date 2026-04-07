@@ -23,7 +23,7 @@ from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
 from app.models.inventory import VendorInventory, VendorProfile
 from app.models.profiles import Profile
-from app.models.catalog import Card, Set, Serie
+from app.models.catalog_v2 import CardV2, ExpansionV2
 from app.schemas.vendor import (
     InventoryItemCreate,
     InventoryItemResponse,
@@ -179,14 +179,14 @@ def add_inventory_item(
 ) -> VendorInventory:
     _get_vendor_or_404(profile, db)  # ensure vendor profile exists
 
-    card = db.get(Card, body.card_id)
+    card = db.get(CardV2, body.card_id)
     if card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Card '{body.card_id}' not found")
 
     item = VendorInventory(
         id=str(uuid.uuid4()),
         profile_id=profile.id,
-        card_id=body.card_id,
+        card_v2_id=body.card_id,
         condition_type=body.condition_type,
         condition_ungraded=body.condition_ungraded,
         grading_company=body.grading_company,
@@ -202,7 +202,26 @@ def add_inventory_item(
     db.add(item)
     db.commit()
     db.refresh(item)
-    return item
+    # Return dict so card_v2_id is exposed as card_id for API compatibility
+    return {
+        "id": item.id,
+        "profile_id": item.profile_id,
+        "card_id": item.card_v2_id,
+        "condition_type": item.condition_type,
+        "condition_ungraded": item.condition_ungraded,
+        "grading_company": item.grading_company,
+        "grade": item.grade,
+        "grading_company_other": item.grading_company_other,
+        "quantity": item.quantity,
+        "cost_basis": item.cost_basis,
+        "asking_price": item.asking_price,
+        "is_for_sale": item.is_for_sale,
+        "is_for_trade": item.is_for_trade,
+        "notes": item.notes,
+        "photo_url": item.photo_url,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
 
 
 @router.get("/inventory", response_model=List[InventoryItemWithCardResponse])
@@ -219,10 +238,9 @@ def list_inventory(
     _get_vendor_or_404(profile, db)  # ensure vendor profile exists
 
     query = (
-        db.query(VendorInventory, Card, Set, Serie)
-        .join(Card, VendorInventory.card_id == Card.id)
-        .join(Set, Card.set_id == Set.id)
-        .join(Serie, Set.serie_id == Serie.id)
+        db.query(VendorInventory, CardV2, ExpansionV2)
+        .join(CardV2, VendorInventory.card_v2_id == CardV2.id)
+        .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
         .filter(
             VendorInventory.profile_id == profile.id,
             VendorInventory.deleted_at.is_(None),
@@ -232,7 +250,7 @@ def list_inventory(
     if condition_type:
         query = query.filter(VendorInventory.condition_type == condition_type)
     if card_id:
-        query = query.filter(VendorInventory.card_id == card_id)
+        query = query.filter(VendorInventory.card_v2_id == card_id)
     if is_for_sale is not None:
         query = query.filter(VendorInventory.is_for_sale == is_for_sale)
     if is_for_trade is not None:
@@ -243,7 +261,7 @@ def list_inventory(
     return [
         {
             "id": item.id,
-            "card_id": item.card_id,
+            "card_id": str(item.card_v2_id),
             "condition_type": item.condition_type,
             "condition_ungraded": item.condition_ungraded,
             "grading_company": item.grading_company,
@@ -256,11 +274,22 @@ def list_inventory(
             "notes": item.notes,
             "created_at": item.created_at,
             "card_name": card.name,
-            "card_num": card.local_id,
-            "set_name": set_row.name,
-            "series_name": serie.name,
-            "image_url": card.image_url,
+            "card_num": card.number,
+            "set_name": expansion.name,
+            "series_name": expansion.series,
+            "image_url": _extract_image_url(card.images),
             "rarity": card.rarity,
+            "game": card.game,
+            "language_code": card.language_code,
         }
-        for item, card, set_row, serie in rows
+        for item, card, expansion in rows
     ]
+
+
+def _extract_image_url(images: Optional[list]) -> Optional[str]:
+    """Pull the small image URL from the V2 API images array (suitable for thumbnails)."""
+    if not images:
+        return None
+    if isinstance(images, list) and images:
+        return images[0].get("small") or images[0].get("large")
+    return None
