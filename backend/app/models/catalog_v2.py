@@ -25,6 +25,7 @@ class ExpansionV2(Base):
     __table_args__ = (
         UniqueConstraint("game", "external_id", name="uq_expansions_v2_game_external_id"),
         CheckConstraint("game IN ('pokemon', 'onepiece')", name="ck_expansions_v2_game"),
+        {"schema": "public"},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -59,6 +60,7 @@ class CardV2(Base):
     __table_args__ = (
         UniqueConstraint("game", "external_id", name="uq_cards_v2_game_external_id"),
         CheckConstraint("game IN ('pokemon', 'onepiece')", name="ck_cards_v2_game"),
+        {"schema": "public"},
     )
 
     # Shared fields
@@ -66,7 +68,7 @@ class CardV2(Base):
     external_id: Mapped[str] = mapped_column(String(), nullable=False)
     game: Mapped[str] = mapped_column(String(), nullable=False)
     expansion_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("expansions_v2.id", name="fk_cards_v2_expansion_id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("public.expansions_v2.id", name="fk_cards_v2_expansion_id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(), nullable=False)
     number: Mapped[Optional[str]] = mapped_column(String(), nullable=True)

@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -136,7 +137,25 @@ def search_cards(
     if name:
         query = query.filter(CardV2.name.ilike(f"%{name}%"))
     if card_num:
-        query = query.filter(CardV2.number.ilike(f"%{card_num}%"))
+        if "/" in card_num:
+            parts = card_num.split("/", 1)
+            num_part = parts[0].lstrip("0") or "0"
+            total_str = parts[1].strip()
+            try:
+                total_int = int(total_str)
+                query = query.filter(
+                    or_(
+                        CardV2.printed_number == card_num,
+                        and_(
+                            CardV2.number == num_part,
+                            ExpansionV2.printed_total == total_int,
+                        ),
+                    )
+                )
+            except ValueError:
+                query = query.filter(CardV2.number.ilike(f"%{card_num}%"))
+        else:
+            query = query.filter(CardV2.number.ilike(f"%{card_num}%"))
     if game:
         query = query.filter(CardV2.game == game)
     if language_code:
