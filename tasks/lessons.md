@@ -60,6 +60,42 @@
 
 ## Session corrections
 
+### 2026-04-07 — next/image proxies external CDN images through localhost; use plain <img>
+**Rule:** Never use `next/image` (`<Image>`) for card images sourced from external CDNs (Scrydex, TCGdex). Next.js proxies remote images through its own image optimization server, which fails with 400 when the CDN rejects the request or localhost can't reach it. Use plain `<img>` tags for externally-hosted card images. Reserve `next/image` for S3-hosted assets (avatars, backgrounds) where the hostname is controlled.
+**Context:** Any component rendering card thumbnails from `cards_v2.images`
+
+### 2026-04-07 — next/image fill prop requires sizes to avoid performance warning
+**Rule:** Always add a `sizes` prop when using `<Image fill ...>`. Use `sizes="100vw"` for full-width images (hero banners), and `sizes="Npx"` (matching the container's fixed pixel width) for fixed-size containers like avatars (`sizes="96px"`) and thumbnails (`sizes="128px"`). Omitting `sizes` triggers a browser console warning and degrades LCP scoring.
+**Context:** `frontend/app/(app)/vendor/profile/page.tsx`, `frontend/app/(app)/collector/profile/page.tsx`, `frontend/app/(app)/vendor/scan/page.tsx`
+
+### 2026-04-07 — V2 API image URLs are complete; never append CDN path suffixes
+**Rule:** V2 API image URLs (from `cards_v2.images[0].large/small/medium`) are fully-qualified and self-contained. Never append path segments like `/high.webp` — that was a TCGdex CDN pattern and does not apply to Scrydex. Appending any suffix produces a 400 from the CDN.
+**Context:** All frontend components rendering `image_url` from the V2 API
+
+### 2026-04-07 — Use `small` image URL for thumbnails; fall back to `large`
+**Rule:** The V2 API returns `images[0].small`, `images[0].medium`, and `images[0].large`. Always use `small` for thumbnails in search results and inventory lists — it's 3–5× smaller than `large` and improves perceived load time significantly. Fall back to `large` if `small` is absent: `images[0].get("small") or images[0].get("large")`.
+**Context:** `api/catalog.py`, `api/vendor.py`, `api/scans.py` `_extract_image_url()`
+
+### 2026-04-07 — V2 API pagination: use len(data) < PAGE_SIZE to detect last page
+**Rule:** Do not use `totalCount` or similar fields from the V2 API response to detect the last page — they are unreliable (may reflect per-page count or be absent). Use `if len(data) < PAGE_SIZE: break` instead. This reliably terminates on a partial page regardless of what the API reports.
+**Context:** `app/tasks/catalog_sync_v2.py` `_fetch_all_pages()`
+
+### 2026-04-07 — V2 API translation field is a nested dict, not a string
+**Rule:** The V2 API `translation` field on expansions is a nested object: `{"en": {"name": "Clay Burst"}}`, not a flat string. Always extract the English name with `(data.get("translation") or {}).get("en", {}).get("name")` before writing to the DB. Attempting to insert the raw dict causes a `can't adapt type 'dict'` psycopg2 error.
+**Context:** `app/tasks/catalog_sync_v2.py` `_upsert_expansion()`
+
+### 2026-04-07 — Alembic migration DNS failure: use Session Mode pooler, not direct host
+**Rule:** When Alembic fails with `could not translate host name "db.xxx.supabase.co"`, the `MIGRATION_DATABASE_URL` is pointing to Supabase's direct host which is not reachable from all networks. Use the Session Mode pooler URL from the Supabase dashboard (different hostname, port 5432, supports DDL). The transaction pooler (port 6543) cannot run DDL.
+**Context:** `backend/.env` `MIGRATION_DATABASE_URL`
+
+### 2026-04-07 — price_snapshots upsert target changed to card_v2_id
+**Rule:** After migration 0017, all inserts to `price_snapshots` must use `ON CONFLICT (card_v2_id, source, variant) DO UPDATE SET`. The old constraint `uq_price_snapshots_card_source_variant` (keyed on `card_id`) has been replaced by `uq_price_snapshots_card_v2_source_variant`. Update this rule to supersede the earlier price_snapshots upsert rule.
+**Context:** `tasks/price_sync.py`, any code writing to `price_snapshots`
+
+### 2026-04-06 — next.config.mjs requires restart for image hostname changes to take effect
+**Rule:** Adding a new hostname to `images.remotePatterns` in `next.config.mjs` requires a full Next.js dev server restart — hot reload does not apply to `next.config.mjs`. Always restart with `npm run dev` after editing this file.
+**Context:** `frontend/next.config.mjs`
+
 ### 2026-03-27 — asyncio.create_task() is unreliable for background work in FastAPI
 **Rule:** Never use `asyncio.create_task()` inside a FastAPI route for background I/O that must complete reliably. If the event loop shuts down mid-task, the work is silently lost. Use FastAPI's `BackgroundTasks` parameter instead — it guarantees the task runs after the response is sent and is tracked by the framework.
 **Context:** `app/api/scans.py`, any route that needs post-response background work

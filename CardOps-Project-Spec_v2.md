@@ -555,22 +555,24 @@ The scan pipeline is the most complex system. Every scan is async.
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | TCGdex as catalog source | Open, well-maintained, typed SDK, aggregates pricing |
-| 2 | TCGdex string IDs as PKs | Debuggable; stable; avoids mapping table |
-| 3 | Card images: reference TCGdex CDN, not re-hosted | Avoids IP risk + S3 cost in MVP; revisit v2 |
-| 4 | No direct TCGPlayer API account in MVP | TCGdex pricing aggregation is sufficient |
-| 5 | Prices in separate table with TTL | Keeps catalog data clean; price staleness explicit |
+| 1 | ~~TCGdex as catalog source~~ → **V2 API (api.scrydex.com) as of 2026-04-06** | V2 API covers Pokémon EN + JP + One Piece EN; TCGdex frozen (tables kept, beat schedule removed) |
+| 2 | ~~TCGdex string IDs as PKs~~ → **UUID PKs + UNIQUE(game, external_id) on v2 tables** | V2 API IDs are unique per game, not globally; synthetic UUID PK avoids cross-game collisions |
+| 3 | Card images: reference V2 API CDN (images.scrydex.com), not re-hosted | Same rationale as TCGdex; URL is `images[0].small` for thumbnails, `images[0].large` for full view |
+| 4 | No direct TCGPlayer API account in MVP | V2 API variants JSONB includes price data; refresh_prices task deferred to Phase 2 |
+| 5 | Prices in `price_snapshots` table (TTL) + embedded in `cards_v2.variants` JSONB | variants stores full API price payload; price_data_uploaded_at tracks freshness |
 | 6 | `show_inventory_tags` junction table | Vendor brings subset of inventory to each show |
-| 7 | Soft deletes on inventory_items | Accounting integrity — sold items must remain referenceable |
-| 8 | Claude Vision for card scanning (no OCR fallback) | Sufficient for MVP; simpler stack |
+| 7 | Soft deletes on vendor_inventory | Accounting integrity — sold items must remain referenceable |
+| 8 | Claude Vision for card scanning (Pokémon-only); Google Cloud Vision OCR as fast path | Claude Vision = reliable, OCR = fast; One Piece scan deferred |
 | 9 | Admin-seeded shows in MVP | Data quality control; no vendor self-serve show creation until v2 |
 | 10 | Customers anonymous by default | Browse/search requires no account; accounts unlock wishlist + collection |
 | 11 | Accounting opt-in only | Financial data isolation; transaction records stored always, UI deferred |
 | 13 | Supabase as PostgreSQL host | Auth + DB on one platform; single dashboard, one connection string, RLS available |
 | 14 | `public.profiles` references `auth.users` | Supabase owns auth lifecycle; profiles table bridges to app data without duplicating auth fields |
 | 15 | Alembic manages `public` schema only | Never touch Supabase's `auth` schema; all migrations scoped to `public` |
-| 16 | `price_snapshots` UNIQUE(card_id, source, variant) | Enables clean upserts in ingestion jobs; enforces one row per card+source+variant |
+| 16 | `price_snapshots` UNIQUE(card_v2_id, source, variant) | Updated from card_id in migration 0017; enables clean upserts keyed to cards_v2 |
 | 17 | VARCHAR + check constraints over PG enums | Easier to extend for One Piece v2 without `ALTER TYPE` migrations |
+| 18 | Single wide table per entity (cards_v2, expansions_v2) with nullable game-specific columns | Avoids separate tables per game; consistent with existing cards table pattern; simpler joins |
+| 19 | vendor_inventory.card_v2_id alongside legacy card_id | Option A migration: additive, reversible; legacy card_id kept as dead column until stable |
 
 ---
 

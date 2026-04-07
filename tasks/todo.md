@@ -1,6 +1,6 @@
 # CardOps — Task Board
 
-## Active phase: Phase 2 complete + Vendor Tools (beyond spec)
+## Active phase: V2 API catalog migration complete — Vendor Inventory live on cards_v2
 
 ---
 
@@ -9,7 +9,7 @@
 - [x] FastAPI project scaffold, venv, alembic.ini
 - [x] Migration 0001 — series, sets, cards, price_snapshots
 - [x] Migration 0002 — public.profiles referencing auth.users
-- [x] seed_catalog.py — 22,754 cards (21 series, 200 sets) seeded
+- [x] seed_catalog.py — 22,754 cards (21 series, 200 sets) seeded (TCGdex, now frozen)
 - [x] Celery beat: catalog.sync_new_sets, catalog.delta_sync_cards, prices.refresh_active_inventory
 - [x] GET /api/v1/cards/{id}, GET /api/v1/cards, GET /api/v1/sets, GET /api/v1/sets/{id}
 
@@ -30,118 +30,85 @@
 
 ### Backend
 - [x] Migration 0004 — scan_jobs table
-- [x] ScanJob SQLAlchemy model (vendor_id FK removed from ORM — enforced at DB level)
+- [x] ScanJob SQLAlchemy model
 - [x] scans.process_scan_job Celery task (S3 → Claude Vision → card match)
-- [x] POST /api/v1/scans — create job + presigned S3 PUT URL (SigV4, us-east-2)
-- [x] POST /api/v1/scans/{id}/trigger — send_task via celery_app.app (not shared_task binding)
+- [x] POST /api/v1/scans — create job + presigned S3 PUT URL
+- [x] POST /api/v1/scans/{id}/trigger — dispatch Celery task
 - [x] GET /api/v1/scans/{id} — poll status
-- [x] WS /api/v1/scans/{id}/ws — WebSocket push with db.expire_all() per poll
-- [x] CORS middleware added to main.py (allow localhost:3000)
-- [x] websockets==12.0 installed for uvicorn WebSocket support
+- [x] WS /api/v1/scans/{id}/ws — WebSocket push
+- [x] CORS middleware added to main.py
 
 ### Frontend
-- [x] Next.js 14 scaffold in frontend/ — Tailwind v3, App Router, TypeScript
-- [x] shadcn components: button, card, badge, progress, tabs
-- [x] lib/supabase.ts, lib/api.ts, app/providers.tsx, app/layout.tsx
-- [x] app/login/page.tsx — Supabase email/password login, redirects to /scan
-- [x] app/scan/page.tsx — full scan UI with auth guard
-- [x] next.config.mjs — assets.tcgdex.net + *.amazonaws.com in remotePatterns
-- [x] End-to-end scan verified: upload → S3 → Celery → Claude → WebSocket → confirmation UI
-
-### Phase 2 complete criteria ✅
-- [x] Vendor uploads card photo from browser
-- [x] Claude correctly identifies the card (base1-58 @ 0.95 confidence verified)
-- [x] Confirmation UI shows identified card with confidence score
-- [x] Confirming adds card to inventory
+- [x] Next.js 14 scaffold — Tailwind v3, App Router, TypeScript, shadcn/ui
+- [x] lib/supabase.ts, lib/api.ts, app/providers.tsx
+- [x] Login page — Supabase email/password auth + onboarding_complete cookie gate
+- [x] Scan page — Claude Vision + Quick Scan (Google Cloud Vision OCR)
+- [x] End-to-end scan verified
 
 ---
 
-## Vendor Tools (post-Phase 2, in progress)
+## Vendor Tools ✅
 
-### Card search — /card-search ✅
-- [x] GET /api/v1/cards extended — JOINs sets + series, returns enriched CardDetailResponse
-- [x] Search params: name, card_num, set_name, series_name (AND logic, any combination)
-- [x] Response fields: card_num, set_name, release_date, series_name, series_logo_url
-- [x] frontend/app/card-search/page.tsx — 4-field search, debounced, Add to inventory per result
+### Card search + inventory — /vendor/inventory
+- [x] GET /api/v1/cards — search by name, card_num, set_name, series_name
+- [x] POST/GET /api/v1/inventory — add + list inventory with card details
+- [x] Vendor inventory page — search + scan + confirm + add to inventory flow
+- [x] Inventory list on vendor profile page
 
-### Vendor profile — /vendor-profile (in progress)
-- [x] Migration 0005 — background_img + avatar_img added to vendor_profiles
-- [x] POST /api/v1/vendor/profile/image — presigned PUT URL for background/avatar upload
-- [x] S3 bucket policy — profiles/* publicly readable
-- [x] Block public access disabled on S3 bucket for profiles/* prefix
-- [x] GET /api/v1/inventory — now JOINs cards/sets/series, returns InventoryItemWithCardResponse
-- [x] frontend/app/vendor-profile/page.tsx:
-  - Hero banner with background image upload
-  - Circle avatar with upload button
-  - display_name, bio, buying_rate, trade_rate, tcg_interests display
-  - Full-width tab bar (Inventory | Wishlist)
-  - Inventory tab: searchable list with card image, name, set, condition, price
-  - Wishlist tab: placeholder
-- [ ] Wishlist backend + frontend (not started)
+### Vendor profile — /vendor/profile
+- [x] Migration 0005 — background_img + avatar_img on vendor_profiles
+- [x] POST /api/v1/vendor/profile/image — presigned PUT URL for S3 upload
+- [x] Hero banner + avatar upload
+- [x] Profile display: bio, buying_rate, trade_rate
 
-### Scan pipeline optimizations ✅
-- [x] Client-side image compression (1400px max, 85% JPEG) before upload
-- [x] Tightened Claude prompt — text-reading first, returns card_name + set_code + local_id + confidence
-- [x] max_tokens=150 (was 256)
-- [x] Redis perceptual hash cache — repeat scans return instantly (TTL 1h, key: scan_cache:{phash}:{action})
-- [x] Pillow + imagehash + python-multipart added to requirements.txt
-- [x] Refactored scan hot path: removed S3+Celery from identification flow
-  - New endpoint: POST /api/v1/scans/identify (multipart UploadFile, async)
-  - FastAPI → Claude directly, returns full card details in one response
-  - S3 image storage + DB scan_job log written via BackgroundTasks (non-blocking)
-- [x] Frontend: single identifyCard() call replaces 4-step flow (no WebSocket, no presigned URL, no trigger)
-- [x] Lookup strategy: name+local_id primary (reliable text read), set_code+local_id fallback
-- [x] Leading-zero normalization: "044" and "44" both match DB records
-- [x] Model upgraded: claude-sonnet-4-20250514 → claude-sonnet-4-6
-- [x] logging.basicConfig in main.py — app logger now outputs to uvicorn terminal
-- [x] IdentifyResponse includes full card details — eliminates second GET /cards/{id} round-trip
-- [x] claude_card_name shown in UI when it differs from matched DB card name (mismatch indicator)
+### Scan pipeline optimizations
+- [x] Client-side image compression before upload
+- [x] Redis perceptual hash cache (TTL 1h)
+- [x] POST /api/v1/scans/identify — Claude Vision fast path (no Celery queue)
+- [x] POST /api/v1/scans/quick-identify — Google Cloud Vision OCR + fuzzy match
+- [x] 4-tier fuzzy matcher: name+local_id → local_id → local_id+hp → fuzzy name
+- [x] Scanner benchmark script — accuracy % + latency per scanner
 
-### Quick Scan — Google Cloud Vision OCR ✅
-- [x] POST /api/v1/scans/quick-identify — Google Cloud Vision OCR + fuzzy catalog match
-- [x] backend/app/services/ocr.py — async Vision client (singleton ImageAnnotatorAsyncClient), text parser
-- [x] backend/app/services/catalog_match.py — 4-tier matching: name+local_id → local_id → local_id+hp → fuzzy name
-- [x] card_count_official used to pin set (num_2 from "029/131" = 131 = sets.card_count_official)
-- [x] Leading-zero normalization + 4-digit num_2 truncation (OCR reads "1910" instead of "191")
-- [x] HP detection searches full raw text (not per-line) to handle "HP\n100" split across lines
-- [x] Name parser skips STAGE1/STAGE2/BASIC/HP/bare numbers — picks first real text line
-- [x] Google credentials loaded from GOOGLE_CREDENTIALS_BASE64 in backend/.env (full JSON base64)
-- [x] Requirements: google-cloud-vision==3.13.0, google-auth==2.28.0, rapidfuzz==3.6.1, protobuf==6.33.6
-- [x] Frontend: Quick Scan button alongside Identify Card button on /scan page
-- [x] Quick Scan compression: 1200px max, 70% JPEG (vs 1400px/85% for Claude Vision)
-- [x] On match: routes into existing confirm → Add to Inventory flow (same UI as Claude Vision)
-- [x] On no-match: inline feedback card with OCR detected text + "Try Identify Card" prompt
-- [x] ocr_num1 / ocr_num2 fields in OCR result + response for debugging
-- [x] Raw OCR text logged at INFO level for debugging
-- [x] claude_vision.py service extracted: call_claude() + lookup_card_from_claude_result()
-  - scans.py now imports call_claude from service (thin wrapper)
-  - benchmark script uses service directly without importing scans router
+---
 
-### Scanner benchmark script ✅
-- [x] backend/scripts/benchmark_scanners.py
-- [x] Randomly samples one card per set (200 sets), set order shuffled, --limit applies to sets
-- [x] Fetches TCGdex CDN images (low.webp for Quick Scan, high.webp for Claude Vision)
-- [x] Quick Scan: calls extract_card_text() + match_card_from_ocr() directly (no server needed)
-- [x] Claude Vision: calls call_claude() + lookup_card_from_claude_result() directly
-- [x] Outputs per-card table: name, set, #, Quick Scan result ✓/✗, time, Claude result ✓/✗, time
-- [x] Summary: accuracy % + p50/p95 latency per scanner
-- [x] --claude flag (off by default — costs money), --limit N, --set SET_ID, --output CSV, --high-res
-- [x] No FastAPI server required — runs against DB + APIs directly
+## V2 API Catalog Migration ✅ (2026-04-06 → 2026-04-07)
 
-### Quick Scan accuracy system (in progress)
-- [x] Option 1: Enriched CSV — ocr_name, ocr_set_number, ocr_hp, match_method, match_confidence, failure_reason per row
-- [x] Option 2: Gold set — --generate-gold (2 cards/series, ~36-42 cards) + --gold flag for reproducible runs
-- [x] Option 3: backend/scripts/analyze_failures.py — breakdown by failure_reason, top failing sets, samples per category
-- [x] OCR parser fixes (22% → 41% on gold set):
-  - Extended _NON_NAME_PATTERN: TRAINER, ENERGY, STAGE I/II, STAGET
-  - Inline prefix stripping: "BASIC Litten" → "Litten", "STAGE Electrode" → "Electrode"
-  - Level indicator stripping: "Aron x.15" → "Aron", "Bronzong LV.49" → "Bronzong"
-  - Evolves-from line filter: skips "Evolves from X" lines on Base Set era cards
-- [x] Catalog matcher: Tier 2b — fuzzy name tiebreaker when multiple cards share local_id
-- [ ] Edition disambiguation for wrong-match failures (now 76% of all failures):
-  - Dominant pattern: correct name + correct local_id but wrong set (e.g. Gyarados col1 → lc, Gouging Fire sv08 → sm6)
-  - Tier 2b fuzzy fires but set still wrong when card name is identical across printings
-  - Need set-pinning strategy using card_count, HP, or era signals
+### New catalog source: V2 API (api.scrydex.com)
+- [x] Migration 0016 — expansions_v2 + cards_v2 tables
+  - UUID PKs, UNIQUE(game, external_id) business key
+  - Supports pokemon (EN + JP) and onepiece (EN)
+  - GIN trigram index on cards_v2.name
+  - variants JSONB stores full API response including prices
+  - price_data_uploaded_at tracks freshness of embedded prices
+- [x] SQLAlchemy models — ExpansionV2, CardV2 (catalog_v2.py)
+- [x] Settings fields: v2_api_key, v2_api_team_id (env vars: V2_API_KEY, V2_API_TEAM_ID)
+- [x] catalog_sync_v2.py Celery tasks:
+  - v2_api.sync_expansions — sync all expansions for a game
+  - v2_api.sync_cards_for_expansion — paginated card sync
+  - v2_api.full_sync — weekly Sunday 4am UTC beat schedule
+  - v2_api.test_sync — smoke test (1 expansion per game)
+  - v2_api.refresh_prices — written but NOT scheduled (Phase 2 activation pending)
+- [x] Pagination fix: terminates on len(data) < PAGE_SIZE (not totalCount comparison)
+- [x] Translation field fix: extracts nested dict → en name string before upsert
+- [x] Full sync completed: all historical Pokémon sets (EN + JP) + One Piece populated
+- [x] TCGdex catalog syncs frozen (catalog.sync_new_sets, catalog.delta_sync_cards removed from beat schedule)
+
+### Pivot all active code to cards_v2 + expansions_v2
+- [x] Migration 0017 — add card_v2_id to vendor_inventory + price_snapshots
+  - vendor_inventory: card_v2_id UUID FK → cards_v2.id (legacy card_id kept as dead column)
+  - price_snapshots: card_v2_id replaces card_id in unique constraint + index
+- [x] api/catalog.py rewritten — GET /cards, GET /cards/{id}, GET /expansions, GET /expansions/{id}
+  - Search params: name, card_num, game, language_code, set_name
+  - image_url extracted server-side from images[0]['small'] (fast thumbnails)
+- [x] api/vendor.py — inventory add/list join cards_v2 + expansions_v2
+- [x] api/scans.py — Claude Vision lookup uses CardV2 + ExpansionV2; pokemon-only filter
+- [x] services/catalog_match.py — Quick Scan fuzzy matcher rewritten for CardV2/ExpansionV2
+- [x] tasks/scan_pipeline.py — _match_card joins ExpansionV2 on external_id
+- [x] schemas/vendor.py — added game, language_code; series_name/card_num now Optional
+- [x] frontend/lib/api.ts — Card interface updated (removed category/illustrator/series_logo_url/variants; added game, language_code; series_name optional)
+- [x] next.config.mjs — images.scrydex.com added to remotePatterns
+- [x] inventory page — replaced next/image with plain <img> for card thumbnails (avoids Next.js proxy 400 on CDN URLs)
+- [x] profile/scan pages — added sizes prop to all next/image fill usages
 
 ---
 
@@ -155,4 +122,11 @@
 - Browse shows (no auth required)
 - Browse vendors at a show
 - Search card inventory across a show
-- Card price lookup (from price_snapshots)
+- Card price lookup (from price_snapshots / cards_v2.variants)
+
+## Backlog / deferred
+- [ ] v2_api.refresh_prices activation — see tasks/full_tcg_api_ingestion_plan.md for credit cost analysis
+- [ ] Quick Scan edition disambiguation (wrong-match failures — correct name, wrong set)
+- [ ] One Piece scan support (scan pipeline currently Pokémon-only)
+- [ ] Wishlist backend + frontend
+- [ ] Drop legacy card_id column from vendor_inventory (migration 0018, after stable)
