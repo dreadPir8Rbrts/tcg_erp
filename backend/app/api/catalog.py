@@ -71,7 +71,8 @@ def get_card(card_id: str, db: Session = Depends(get_db)):
 @router.get("/cards", response_model=List[CardDetailResponse])
 def search_cards(
     name: Optional[str] = Query(None, min_length=2, description="Filter by card name (contains)"),
-    card_num: Optional[str] = Query(None, min_length=1, description="Filter by card number within set"),
+    card_num: Optional[str] = Query(None, min_length=1, description="Filter by local_id within set"),
+    card_count: Optional[int] = Query(None, description="Filter by set card_count_official (the /NNN part of a set number)"),
     set_name: Optional[str] = Query(None, min_length=2, description="Filter by set name (contains)"),
     series_name: Optional[str] = Query(None, min_length=2, description="Filter by series name (contains)"),
     limit: int = Query(20, ge=1, le=100),
@@ -90,6 +91,8 @@ def search_cards(
         query = query.filter(Card.name.ilike(f"%{name}%"))
     if card_num:
         query = query.filter(Card.local_id.ilike(f"%{card_num}%"))
+    if card_count is not None:
+        query = query.filter(Set.card_count_official == card_count)
     if set_name:
         query = query.filter(Set.name.ilike(f"%{set_name}%"))
     if series_name:

@@ -31,3 +31,4 @@ node_modules/
 .next/
 frontend/.env
 frontend/.env.local
+backend/dump.rdb

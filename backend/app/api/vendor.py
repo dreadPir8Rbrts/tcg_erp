@@ -31,7 +31,6 @@ from app.schemas.vendor import (
     VendorProfileCreate,
     VendorProfileResponse,
     VendorProfileUpdate,
-    VALID_CONDITIONS,
 )
 
 router = APIRouter(tags=["vendor"])
@@ -180,12 +179,6 @@ def add_inventory_item(
 ) -> VendorInventory:
     _get_vendor_or_404(profile, db)  # ensure vendor profile exists
 
-    if body.condition not in VALID_CONDITIONS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid condition '{body.condition}'",
-        )
-
     card = db.get(Card, body.card_id)
     if card is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Card '{body.card_id}' not found")
@@ -194,9 +187,11 @@ def add_inventory_item(
         id=str(uuid.uuid4()),
         profile_id=profile.id,
         card_id=body.card_id,
-        condition=body.condition,
-        grading_service=body.grading_service,
-        cert_number=body.cert_number,
+        condition_type=body.condition_type,
+        condition_ungraded=body.condition_ungraded,
+        grading_company=body.grading_company,
+        grade=body.grade,
+        grading_company_other=body.grading_company_other,
         quantity=body.quantity,
         cost_basis=body.cost_basis,
         asking_price=body.asking_price,
@@ -212,7 +207,7 @@ def add_inventory_item(
 
 @router.get("/inventory", response_model=List[InventoryItemWithCardResponse])
 def list_inventory(
-    condition: Optional[str] = Query(None),
+    condition_type: Optional[str] = Query(None),
     card_id: Optional[str] = Query(None),
     is_for_sale: Optional[bool] = Query(None),
     is_for_trade: Optional[bool] = Query(None),
@@ -234,8 +229,8 @@ def list_inventory(
         )
     )
 
-    if condition:
-        query = query.filter(VendorInventory.condition == condition)
+    if condition_type:
+        query = query.filter(VendorInventory.condition_type == condition_type)
     if card_id:
         query = query.filter(VendorInventory.card_id == card_id)
     if is_for_sale is not None:
@@ -249,7 +244,11 @@ def list_inventory(
         {
             "id": item.id,
             "card_id": item.card_id,
-            "condition": item.condition,
+            "condition_type": item.condition_type,
+            "condition_ungraded": item.condition_ungraded,
+            "grading_company": item.grading_company,
+            "grade": item.grade,
+            "grading_company_other": item.grading_company_other,
             "quantity": item.quantity,
             "asking_price": item.asking_price,
             "is_for_sale": item.is_for_sale,
