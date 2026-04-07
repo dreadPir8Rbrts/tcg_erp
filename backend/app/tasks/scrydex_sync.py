@@ -5,6 +5,7 @@ Tasks:
   scrydex.sync_expansions             — fetch + upsert all expansions for one game
   scrydex.sync_cards_for_expansion    — fetch + upsert all cards for one expansion (paginated)
   scrydex.full_sync                   — orchestrator: syncs expansions then fans out card tasks
+  scrydex.test_sync                   — syncs 1 expansion per game for smoke-testing
   scrydex.refresh_prices              — lightweight price refresh (NOT scheduled — ready for Phase 2)
 
 All tasks are idempotent: upsert on UNIQUE(game, external_id) — safe to re-run at any time.
@@ -54,6 +55,9 @@ def _fetch_all_pages(client: httpx.Client, url: str, extra_params: Optional[Dict
     """
     Paginate through a Scrydex list endpoint and return all items.
     Raises httpx.HTTPStatusError on non-2xx responses.
+
+    Termination: stop when the page returns fewer items than PAGE_SIZE — this
+    reliably signals the last page without depending on the totalCount field name.
     """
     params: Dict[str, Any] = dict(extra_params or {})
     params["page_size"] = PAGE_SIZE
@@ -69,8 +73,8 @@ def _fetch_all_pages(client: httpx.Client, url: str, extra_params: Optional[Dict
         data = body.get("data", [])
         all_items.extend(data)
 
-        total = body.get("totalCount", 0)
-        if not data or len(all_items) >= total:
+        # Stop if this was the last page (partial page or empty)
+        if len(data) < PAGE_SIZE:
             break
 
         page += 1
@@ -107,7 +111,8 @@ def _upsert_expansion(db, game: str, data: dict) -> None:
         "printed_total": data.get("printed_total"),
         "is_online_only": data.get("is_online_only"),
         "symbol_url": data.get("symbol"),
-        "translation": data.get("translation"),
+        # translation from API is {"en": {"name": "..."}} — extract the English name string
+        "translation": (data.get("translation") or {}).get("en", {}).get("name"),
         # One Piece-only
         "type": data.get("type"),
         # Shared
@@ -358,10 +363,97 @@ def full_sync() -> dict:
         "scrydex.full_sync dispatched — expansions_synced=%d, card_tasks_dispatched=%d",
         total_expansions, dispatched,
     )
+    print(f"\n{'='*60}\nSYNC FINISHED — expansions_synced={total_expansions}, card_sync_tasks_dispatched={dispatched}\n{'='*60}\n", flush=True)
     return {
         "expansions_synced": total_expansions,
         "card_sync_tasks_dispatched": dispatched,
     }
+
+
+@shared_task(name="scrydex.test_sync")
+def test_sync(expansions_per_game: int = 1) -> dict:
+    """
+    Smoke-test sync — fetches the most recent N expansions per game and their cards.
+    Runs synchronously (no fan-out) so results are visible immediately.
+
+    Usage:
+        celery -A celery_app call scrydex.test_sync
+        celery -A celery_app call scrydex.test_sync --args='[2]'   # 2 expansions per game
+    """
+    logger.info("scrydex.test_sync started — expansions_per_game=%d", expansions_per_game)
+
+    if not settings.scrydex_api_key or not settings.scrydex_team_id:
+        logger.error("SCRYDEX_API_KEY or SCRYDEX_TEAM_ID not configured — aborting")
+        return {"error": "missing credentials"}
+
+    results = {}
+
+    for game in SYNC_GAMES:
+        logger.info("test_sync: fetching expansions for game=%s", game)
+        url = f"{SCRYDEX_BASE}/{game}/v1/expansions"
+        db = SessionLocal()
+        game_results = {"expansions_synced": 0, "cards_synced": 0, "expansions": []}
+
+        try:
+            with _scrydex_client() as client:
+                # Fetch only the first page and take the first N expansions
+                resp = client.get(url, params={"page": 1, "page_size": expansions_per_game})
+                resp.raise_for_status()
+                expansions = resp.json().get("data", [])[:expansions_per_game]
+
+            for exp_data in expansions:
+                try:
+                    _upsert_expansion(db, game, exp_data)
+                    game_results["expansions_synced"] += 1
+                except Exception as exc:
+                    logger.error("test_sync: failed to upsert expansion %s: %s", exp_data.get("id"), exc)
+                    continue
+
+            db.commit()
+
+            # Sync cards for each test expansion synchronously
+            for exp_data in expansions:
+                exp_external_id = exp_data["id"]
+                expansion = db.query(ExpansionV2).filter_by(game=game, external_id=exp_external_id).first()
+                if expansion is None:
+                    continue
+
+                cards_url = f"{SCRYDEX_BASE}/{game}/v1/expansions/{exp_external_id}/cards"
+                cards_synced = 0
+
+                try:
+                    with _scrydex_client() as client:
+                        cards = _fetch_all_pages(client, cards_url)
+
+                    for card_data in cards:
+                        try:
+                            _upsert_card(db, game, expansion.id, card_data)
+                            cards_synced += 1
+                        except Exception as exc:
+                            logger.error("test_sync: failed to upsert card %s: %s", card_data.get("id"), exc)
+
+                    db.commit()
+                    game_results["cards_synced"] += cards_synced
+                    game_results["expansions"].append({
+                        "id": exp_external_id,
+                        "name": exp_data.get("name"),
+                        "cards_synced": cards_synced,
+                    })
+                    logger.info("test_sync: %s / %s — %d cards synced", game, exp_external_id, cards_synced)
+
+                except Exception as exc:
+                    logger.error("test_sync: failed to sync cards for %s: %s", exp_external_id, exc)
+
+        except Exception as exc:
+            logger.exception("test_sync: unexpected error for game=%s: %s", game, exc)
+            db.rollback()
+        finally:
+            db.close()
+
+        results[game] = game_results
+
+    logger.info("scrydex.test_sync complete — %s", results)
+    return results
 
 
 @shared_task(name="scrydex.refresh_prices")
