@@ -1,16 +1,16 @@
-"""Add expansions_v2 and cards_v2 tables for Scrydex-sourced catalog data.
+"""Add expansions_v2 and cards_v2 tables for V2 API catalog data.
 
 Revision ID: 0016
 Revises: 0015
 Create Date: 2026-04-06
 
 Replaces TCGdex-sourced tables (series/sets/cards) as the active catalog layer.
-Supports multi-game (pokemon, onepiece) and multi-language data from Scrydex.
+Supports multi-game (pokemon, onepiece) and multi-language data from the V2 API.
 
 Key design decisions:
-  - UUID PKs (synthetic) — Scrydex external IDs are unique per game, not globally
+  - UUID PKs (synthetic) — V2 API external IDs are unique per game, not globally
   - UNIQUE(game, external_id) is the business key used for all upserts
-  - cards_v2.variants stores the full Scrydex API variant response including prices
+  - cards_v2.variants stores the full V2 API variant response including prices
   - cards_v2.price_data_uploaded_at tracks freshness of embedded price data
   - Game-specific nullable columns rather than separate tables (consistent with
     existing cards table pattern; no ENUM types per project convention)

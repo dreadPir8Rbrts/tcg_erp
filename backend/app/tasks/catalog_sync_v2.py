@@ -1,12 +1,12 @@
 """
-Scrydex catalog sync tasks — populate expansions_v2 and cards_v2 from the Scrydex API.
+V2 API catalog sync tasks — populate expansions_v2 and cards_v2 from the V2 API.
 
 Tasks:
-  scrydex.sync_expansions             — fetch + upsert all expansions for one game
-  scrydex.sync_cards_for_expansion    — fetch + upsert all cards for one expansion (paginated)
-  scrydex.full_sync                   — orchestrator: syncs expansions then fans out card tasks
-  scrydex.test_sync                   — syncs 1 expansion per game for smoke-testing
-  scrydex.refresh_prices              — lightweight price refresh (NOT scheduled — ready for Phase 2)
+  v2_api.sync_expansions             — fetch + upsert all expansions for one game
+  v2_api.sync_cards_for_expansion    — fetch + upsert all cards for one expansion (paginated)
+  v2_api.full_sync                   — orchestrator: syncs expansions then fans out card tasks
+  v2_api.test_sync                   — syncs 1 expansion per game for smoke-testing
+  v2_api.refresh_prices              — lightweight price refresh (NOT scheduled — ready for Phase 2)
 
 All tasks are idempotent: upsert on UNIQUE(game, external_id) — safe to re-run at any time.
 Error handling: log and continue — a single bad card/expansion never aborts the full run.
@@ -28,7 +28,7 @@ from app.models.catalog_v2 import CardV2, ExpansionV2
 
 logger = logging.getLogger(__name__)
 
-SCRYDEX_BASE = "https://api.scrydex.com"
+V2_API_BASE = "https://api.scrydex.com"
 PAGE_SIZE = 100
 
 # Games covered by the full sync.
@@ -40,20 +40,20 @@ SYNC_GAMES = ["pokemon", "onepiece"]
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
-def _scrydex_client() -> httpx.Client:
-    """Return a configured httpx Client with Scrydex auth headers."""
+def _v2_api_client() -> httpx.Client:
+    """Return a configured httpx Client with V2 API auth headers."""
     return httpx.Client(
         timeout=30.0,
         headers={
-            "X-Api-Key": settings.scrydex_api_key or "",
-            "X-Team-ID": settings.scrydex_team_id or "",
+            "X-Api-Key": settings.v2_api_key or "",
+            "X-Team-ID": settings.v2_api_team_id or "",
         },
     )
 
 
 def _fetch_all_pages(client: httpx.Client, url: str, extra_params: Optional[Dict[str, Any]] = None) -> List[dict]:
     """
-    Paginate through a Scrydex list endpoint and return all items.
+    Paginate through a V2 API list endpoint and return all items.
     Raises httpx.HTTPStatusError on non-2xx responses.
 
     Termination: stop when the page returns fewer items than PAGE_SIZE — this
@@ -87,7 +87,7 @@ def _fetch_all_pages(client: httpx.Client, url: str, extra_params: Optional[Dict
 # ---------------------------------------------------------------------------
 
 def _parse_release_date(raw: Optional[str]) -> Optional[date]:
-    """Parse Scrydex date format 'YYYY/MM/DD' → date object."""
+    """Parse V2 API date format 'YYYY/MM/DD' → date object."""
     if not raw:
         return None
     try:
@@ -200,24 +200,24 @@ def _upsert_card(db, game: str, expansion_id: uuid.UUID, data: dict) -> None:
 # Tasks
 # ---------------------------------------------------------------------------
 
-@shared_task(name="scrydex.sync_expansions")
+@shared_task(name="v2_api.sync_expansions")
 def sync_expansions(game: str) -> dict:
     """
-    Fetch all expansions for a game from Scrydex and upsert into expansions_v2.
+    Fetch all expansions for a game from the V2 API and upsert into expansions_v2.
     Runs as part of full_sync; can also be triggered independently.
     """
-    logger.info("scrydex.sync_expansions started — game=%s", game)
+    logger.info("v2_api.sync_expansions started — game=%s", game)
 
-    if not settings.scrydex_api_key or not settings.scrydex_team_id:
-        logger.error("SCRYDEX_API_KEY or SCRYDEX_TEAM_ID not configured — aborting")
+    if not settings.v2_api_key or not settings.v2_api_team_id:
+        logger.error("V2_API_KEY or V2_API_TEAM_ID not configured — aborting")
         return {"game": game, "expansions_synced": 0, "error": "missing credentials"}
 
-    url = f"{SCRYDEX_BASE}/{game}/v1/expansions"
+    url = f"{V2_API_BASE}/{game}/v1/expansions"
     db = SessionLocal()
     synced = 0
 
     try:
-        with _scrydex_client() as client:
+        with _v2_api_client() as client:
             expansions = _fetch_all_pages(client, url)
 
         for exp_data in expansions:
@@ -243,23 +243,23 @@ def sync_expansions(game: str) -> dict:
     finally:
         db.close()
 
-    logger.info("scrydex.sync_expansions complete — game=%s, synced=%d", game, synced)
+    logger.info("v2_api.sync_expansions complete — game=%s, synced=%d", game, synced)
     return {"game": game, "expansions_synced": synced}
 
 
-@shared_task(name="scrydex.sync_cards_for_expansion")
+@shared_task(name="v2_api.sync_cards_for_expansion")
 def sync_cards_for_expansion(expansion_external_id: str, game: str) -> dict:
     """
     Fetch all cards for a single expansion and upsert into cards_v2.
     Dispatched once per expansion by full_sync. Can also be triggered independently.
     """
     logger.info(
-        "scrydex.sync_cards_for_expansion started — game=%s, expansion=%s",
+        "v2_api.sync_cards_for_expansion started — game=%s, expansion=%s",
         game, expansion_external_id,
     )
 
-    if not settings.scrydex_api_key or not settings.scrydex_team_id:
-        logger.error("SCRYDEX_API_KEY or SCRYDEX_TEAM_ID not configured — aborting")
+    if not settings.v2_api_key or not settings.v2_api_team_id:
+        logger.error("V2_API_KEY or V2_API_TEAM_ID not configured — aborting")
         return {"game": game, "expansion": expansion_external_id, "cards_synced": 0, "error": "missing credentials"}
 
     db = SessionLocal()
@@ -280,9 +280,9 @@ def sync_cards_for_expansion(expansion_external_id: str, game: str) -> dict:
             return {"game": game, "expansion": expansion_external_id, "cards_synced": 0, "error": "expansion not found"}
 
         expansion_id = expansion.id
-        url = f"{SCRYDEX_BASE}/{game}/v1/expansions/{expansion_external_id}/cards"
+        url = f"{V2_API_BASE}/{game}/v1/expansions/{expansion_external_id}/cards"
 
-        with _scrydex_client() as client:
+        with _v2_api_client() as client:
             cards = _fetch_all_pages(client, url)
 
         for card_data in cards:
@@ -315,16 +315,16 @@ def sync_cards_for_expansion(expansion_external_id: str, game: str) -> dict:
         db.close()
 
     logger.info(
-        "scrydex.sync_cards_for_expansion complete — game=%s, expansion=%s, synced=%d",
+        "v2_api.sync_cards_for_expansion complete — game=%s, expansion=%s, synced=%d",
         game, expansion_external_id, synced,
     )
     return {"game": game, "expansion": expansion_external_id, "cards_synced": synced}
 
 
-@shared_task(name="scrydex.full_sync")
+@shared_task(name="v2_api.full_sync")
 def full_sync() -> dict:
     """
-    Orchestrator for the full Scrydex catalog sync.
+    Orchestrator for the full V2 API catalog sync.
 
     Steps:
       1. Run sync_expansions in-process for each game (must complete before card fan-out)
@@ -333,9 +333,9 @@ def full_sync() -> dict:
 
     Scheduled weekly (Sunday 4am UTC) via celery beat.
     For the initial data load, trigger manually:
-        celery -A celery_app call scrydex.full_sync
+        celery -A celery_app call v2_api.full_sync
     """
-    logger.info("scrydex.full_sync started")
+    logger.info("v2_api.full_sync started")
     total_expansions = 0
 
     # Step 1: sync all expansions for each game in-process so they're available
@@ -360,7 +360,7 @@ def full_sync() -> dict:
         dispatched += 1
 
     logger.info(
-        "scrydex.full_sync dispatched — expansions_synced=%d, card_tasks_dispatched=%d",
+        "v2_api.full_sync dispatched — expansions_synced=%d, card_tasks_dispatched=%d",
         total_expansions, dispatched,
     )
     print(f"\n{'='*60}\nSYNC FINISHED — expansions_synced={total_expansions}, card_sync_tasks_dispatched={dispatched}\n{'='*60}\n", flush=True)
@@ -370,32 +370,32 @@ def full_sync() -> dict:
     }
 
 
-@shared_task(name="scrydex.test_sync")
+@shared_task(name="v2_api.test_sync")
 def test_sync(expansions_per_game: int = 1) -> dict:
     """
     Smoke-test sync — fetches the most recent N expansions per game and their cards.
     Runs synchronously (no fan-out) so results are visible immediately.
 
     Usage:
-        celery -A celery_app call scrydex.test_sync
-        celery -A celery_app call scrydex.test_sync --args='[2]'   # 2 expansions per game
+        celery -A celery_app call v2_api.test_sync
+        celery -A celery_app call v2_api.test_sync --args='[2]'   # 2 expansions per game
     """
-    logger.info("scrydex.test_sync started — expansions_per_game=%d", expansions_per_game)
+    logger.info("v2_api.test_sync started — expansions_per_game=%d", expansions_per_game)
 
-    if not settings.scrydex_api_key or not settings.scrydex_team_id:
-        logger.error("SCRYDEX_API_KEY or SCRYDEX_TEAM_ID not configured — aborting")
+    if not settings.v2_api_key or not settings.v2_api_team_id:
+        logger.error("V2_API_KEY or V2_API_TEAM_ID not configured — aborting")
         return {"error": "missing credentials"}
 
     results = {}
 
     for game in SYNC_GAMES:
         logger.info("test_sync: fetching expansions for game=%s", game)
-        url = f"{SCRYDEX_BASE}/{game}/v1/expansions"
+        url = f"{V2_API_BASE}/{game}/v1/expansions"
         db = SessionLocal()
         game_results = {"expansions_synced": 0, "cards_synced": 0, "expansions": []}
 
         try:
-            with _scrydex_client() as client:
+            with _v2_api_client() as client:
                 # Fetch only the first page and take the first N expansions
                 resp = client.get(url, params={"page": 1, "page_size": expansions_per_game})
                 resp.raise_for_status()
@@ -418,11 +418,11 @@ def test_sync(expansions_per_game: int = 1) -> dict:
                 if expansion is None:
                     continue
 
-                cards_url = f"{SCRYDEX_BASE}/{game}/v1/expansions/{exp_external_id}/cards"
+                cards_url = f"{V2_API_BASE}/{game}/v1/expansions/{exp_external_id}/cards"
                 cards_synced = 0
 
                 try:
-                    with _scrydex_client() as client:
+                    with _v2_api_client() as client:
                         cards = _fetch_all_pages(client, cards_url)
 
                     for card_data in cards:
@@ -452,11 +452,11 @@ def test_sync(expansions_per_game: int = 1) -> dict:
 
         results[game] = game_results
 
-    logger.info("scrydex.test_sync complete — %s", results)
+    logger.info("v2_api.test_sync complete — %s", results)
     return results
 
 
-@shared_task(name="scrydex.refresh_prices")
+@shared_task(name="v2_api.refresh_prices")
 def refresh_prices() -> dict:
     """
     Lightweight price refresh — re-fetches variants (price data) for all cards in cards_v2
@@ -464,8 +464,8 @@ def refresh_prices() -> dict:
 
     NOT scheduled — ready for Phase 2 activation.
     To schedule, add to celery_app.py beat_schedule:
-        "scrydex-refresh-prices": {
-            "task": "scrydex.refresh_prices",
+        "v2-api-refresh-prices": {
+            "task": "v2_api.refresh_prices",
             "schedule": crontab(hour="*/6", minute=0),
         }
 
@@ -475,10 +475,10 @@ def refresh_prices() -> dict:
       - Hybrid: only refresh cards with active inventory — most cost-efficient
     See tasks/full_tcg_api_ingestion_plan.md for full credit cost analysis.
     """
-    logger.info("scrydex.refresh_prices started")
+    logger.info("v2_api.refresh_prices started")
 
-    if not settings.scrydex_api_key or not settings.scrydex_team_id:
-        logger.error("SCRYDEX_API_KEY or SCRYDEX_TEAM_ID not configured — aborting")
+    if not settings.v2_api_key or not settings.v2_api_team_id:
+        logger.error("V2_API_KEY or V2_API_TEAM_ID not configured — aborting")
         return {"cards_refreshed": 0, "error": "missing credentials"}
 
     db = SessionLocal()
@@ -488,9 +488,9 @@ def refresh_prices() -> dict:
     try:
         cards = db.query(CardV2.id, CardV2.game, CardV2.external_id).all()
 
-        with _scrydex_client() as client:
+        with _v2_api_client() as client:
             for card_id, game, external_id in cards:
-                url = f"{SCRYDEX_BASE}/{game}/v1/cards/{external_id}"
+                url = f"{V2_API_BASE}/{game}/v1/cards/{external_id}"
                 try:
                     resp = client.get(url, params={"select": "variants"})
                     resp.raise_for_status()
@@ -508,7 +508,7 @@ def refresh_prices() -> dict:
                     # Commit in batches of 500 to avoid long-running transactions
                     if refreshed % 500 == 0:
                         db.commit()
-                        logger.info("scrydex.refresh_prices — %d cards refreshed so far", refreshed)
+                        logger.info("v2_api.refresh_prices — %d cards refreshed so far", refreshed)
 
                 except httpx.HTTPError as exc:
                     logger.error("Failed to refresh prices for card %s (game=%s): %s — skipping", external_id, game, exc)
@@ -517,11 +517,11 @@ def refresh_prices() -> dict:
         db.commit()
 
     except Exception as exc:
-        logger.exception("Unexpected error in scrydex.refresh_prices: %s", exc)
+        logger.exception("Unexpected error in v2_api.refresh_prices: %s", exc)
         db.rollback()
         raise
     finally:
         db.close()
 
-    logger.info("scrydex.refresh_prices complete — refreshed=%d, errors=%d", refreshed, errors)
+    logger.info("v2_api.refresh_prices complete — refreshed=%d, errors=%d", refreshed, errors)
     return {"cards_refreshed": refreshed, "errors": errors}

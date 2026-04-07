@@ -1,8 +1,8 @@
-# Full TCG API Ingestion Plan — Scrydex
+# Full TCG API Ingestion Plan — V2 API
 
 ## Overview
 
-Replace the existing TCGdex catalog (English Pokémon only) with Scrydex as the primary card data source. Scrydex supports Pokémon (English + Japanese) and One Piece (English), giving the platform multi-game and multi-language coverage from a single API.
+Replace the existing TCGdex catalog (English Pokémon only) with V2 API as the primary card data source. V2 API supports Pokémon (English + Japanese) and One Piece (English), giving the platform multi-game and multi-language coverage from a single API.
 
 This document covers:
 - Phase 1: Schema + full structural sync (Day 1)
@@ -12,7 +12,7 @@ This document covers:
 
 ## Background
 
-| | TCGdex (current) | Scrydex (new) |
+| | TCGdex (current) | V2 API (new) |
 |---|---|---|
 | Games | Pokémon only | Pokémon, One Piece (+ MTG, Lorcana, Gundam) |
 | Languages | English only | English + Japanese |
@@ -28,9 +28,9 @@ The existing `cards`, `sets`, and `series` tables remain in the database but TCG
 ### Deliverables
 
 1. **Migration 0016** — `expansions_v2` + `cards_v2` tables
-2. **`backend/app/tasks/scrydex_sync.py`** — three Celery tasks
+2. **`backend/app/tasks/v2_api_sync.py`** — three Celery tasks
 3. **Freeze TCGdex beat schedule** — remove entries from `celery_app.py`
-4. **Settings update** — add `scrydex_api_key` + `scrydex_team_id` to `session.py`
+4. **Settings update** — add `v2_api_api_key` + `v2_api_team_id` to `session.py`
 
 ---
 
@@ -62,7 +62,7 @@ CREATE TABLE expansions_v2 (
 ```
 
 **Key design decisions:**
-- UUID PK (not external_id) — Scrydex IDs are unique within a game, not guaranteed across games
+- UUID PK (not external_id) — V2 API IDs are unique within a game, not guaranteed across games
 - `UNIQUE(game, external_id)` is the business key used for all upserts
 - Nullable game-specific columns rather than separate tables — consistent with existing `cards` table pattern and no ENUM rule
 
@@ -130,30 +130,30 @@ The full API variant object is stored as-is, including any embedded price fields
 
 ---
 
-### Celery Tasks — `backend/app/tasks/scrydex_sync.py`
+### Celery Tasks — `backend/app/tasks/v2_api_sync.py`
 
 #### Task naming (follows `domain.action` convention)
 
 ```
-scrydex.sync_expansions             — fetch + upsert all expansions for one game
-scrydex.sync_cards_for_expansion    — fetch + upsert all cards for one expansion
-scrydex.full_sync                   — orchestrator: expansions → fan out cards
+v2_api.sync_expansions             — fetch + upsert all expansions for one game
+v2_api.sync_cards_for_expansion    — fetch + upsert all cards for one expansion
+v2_api.full_sync                   — orchestrator: expansions → fan out cards
 ```
 
-#### `scrydex.sync_expansions(game: str)`
+#### `v2_api.sync_expansions(game: str)`
 
 1. `GET /v1/expansions?page_size=100` (paginated) for the given game
 2. Upsert each expansion into `expansions_v2` on `UNIQUE(game, external_id)`
 3. Updates `last_synced_at` on every upsert
 
-#### `scrydex.sync_cards_for_expansion(expansion_external_id: str, game: str)`
+#### `v2_api.sync_cards_for_expansion(expansion_external_id: str, game: str)`
 
 1. `GET /v1/expansions/{external_id}/cards?page_size=100` (paginated)
 2. Resolve `expansion_id` UUID from `expansions_v2` via `(game, external_id)`
 3. Upsert each card into `cards_v2` on `UNIQUE(game, external_id)`
 4. Sets both `last_synced_at` and `price_data_uploaded_at` on every upsert
 
-#### `scrydex.full_sync()`
+#### `v2_api.full_sync()`
 
 1. For each game in `['pokemon', 'onepiece']`:
    a. Call `sync_expansions(game)`
@@ -169,8 +169,8 @@ scrydex.full_sync                   — orchestrator: expansions → fan out car
 #### Beat schedule addition to `celery_app.py`
 
 ```python
-"scrydex-full-sync": {
-    "task": "scrydex.full_sync",
+"v2_api-full-sync": {
+    "task": "v2_api.full_sync",
     "schedule": crontab(hour=4, minute=0, day_of_week=0),  # Sunday 4am
 },
 ```
@@ -190,14 +190,14 @@ scrydex.full_sync                   — orchestrator: expansions → fan out car
 ### Settings update — `session.py`
 
 ```python
-scrydex_api_key:  Optional[str] = None
-scrydex_team_id:  Optional[str] = None
+v2_api_api_key:  Optional[str] = None
+v2_api_team_id:  Optional[str] = None
 ```
 
-Both sourced from `backend/.env`. Injected as headers on every Scrydex request:
+Both sourced from `backend/.env`. Injected as headers on every V2 API request:
 ```
-X-Api-Key:  {scrydex_api_key}
-X-Team-ID:  {scrydex_team_id}
+X-Api-Key:  {v2_api_api_key}
+X-Team-ID:  {v2_api_team_id}
 ```
 
 ---
@@ -206,8 +206,8 @@ X-Team-ID:  {scrydex_team_id}
 
 | Game | Languages | Source endpoint |
 |---|---|---|
-| Pokémon | English + Japanese | `https://api.scrydex.com/pokemon/v1/` |
-| One Piece | English only | `https://api.scrydex.com/onepiece/v1/` |
+| Pokémon | English + Japanese | `https://api.v2_api.com/pokemon/v1/` |
+| One Piece | English only | `https://api.v2_api.com/onepiece/v1/` |
 
 ---
 
@@ -230,7 +230,7 @@ Monthly recurring (weekly full sync, mostly no-ops on unchanged data): ~1,400 ×
 After deploying migration 0016 and the new Celery tasks, trigger the initial sync manually:
 
 ```bash
-celery -A app.celery_app call scrydex.full_sync
+celery -A app.celery_app call v2_api.full_sync
 ```
 
 ---
@@ -242,10 +242,10 @@ celery -A app.celery_app call scrydex.full_sync
 Card structure (name, attacks, HP, rarity) changes almost never — a weekly sync is sufficient.
 Prices change daily. Running a full structural sync just to get fresh prices is wasteful.
 
-### New task — `scrydex.refresh_prices`
+### New task — `v2_api.refresh_prices`
 
 ```
-scrydex.refresh_prices   — re-fetch variants (prices only) for all cards in cards_v2
+v2_api.refresh_prices   — re-fetch variants (prices only) for all cards in cards_v2
 ```
 
 #### Behavior
@@ -259,8 +259,8 @@ scrydex.refresh_prices   — re-fetch variants (prices only) for all cards in ca
 #### Beat schedule
 
 ```python
-"scrydex-refresh-prices": {
-    "task": "scrydex.refresh_prices",
+"v2_api-refresh-prices": {
+    "task": "v2_api.refresh_prices",
     "schedule": crontab(hour="*/6", minute=0),  # Every 6 hours (adjust to taste)
 },
 ```
@@ -271,7 +271,7 @@ scrydex.refresh_prices   — re-fetch variants (prices only) for all cards in ca
 - Per 6-hour run: ~90,000 credits
 - Per month: ~90,000 × 4/day × 30 days = high
 
-**This makes the `select=variants` optimization critical.** The Phase 2 implementation must confirm whether Scrydex counts `select`-filtered requests at the same 1 credit rate or at a reduced rate. If per-card requests are prohibitive, the alternative is to re-fetch at the expansion level (`/expansions/{id}/cards?select=variants&page_size=100`) which amortizes credits across 100 cards per request — reducing the cost by ~100×.
+**This makes the `select=variants` optimization critical.** The Phase 2 implementation must confirm whether V2 API counts `select`-filtered requests at the same 1 credit rate or at a reduced rate. If per-card requests are prohibitive, the alternative is to re-fetch at the expansion level (`/expansions/{id}/cards?select=variants&page_size=100`) which amortizes credits across 100 cards per request — reducing the cost by ~100×.
 
 **Decision to make at Phase 2 time:**
 - Per-card refresh (maximum freshness, higher credit cost)
@@ -286,6 +286,6 @@ The hybrid approach — refreshing prices only for cards that appear in `vendor_
 
 - **Inventory FK migration** — add nullable `card_v2_id UUID → cards_v2.id` to `vendor_inventory` and `collector_inventory`; populate from existing `card_id` matches; eventually make NOT NULL and drop `card_id`
 - **Drop TCGdex tables** — once inventory migration is complete and no code references `cards`/`sets`/`series`
-- **One Piece Japanese** — add `'JP'` language to the One Piece sync once confirmed available via Scrydex
-- **Additional games** — Scrydex supports MTG, Lorcana, Gundam, Riftbound; same `cards_v2`/`expansions_v2` schema accommodates them with new `game` values
+- **One Piece Japanese** — add `'JP'` language to the One Piece sync once confirmed available via V2 API
+- **Additional games** — V2 API supports MTG, Lorcana, Gundam, Riftbound; same `cards_v2`/`expansions_v2` schema accommodates them with new `game` values
 - **Dedicated `price_snapshots_v2` table** — normalized price history if point-in-time queries become a product requirement

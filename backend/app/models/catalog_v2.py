@@ -1,12 +1,12 @@
 """
-SQLAlchemy models for the Scrydex-sourced catalog tables (v2).
+SQLAlchemy models for the V2 API catalog tables (v2).
 
 Tables:
   expansions_v2  — TCG set/expansion metadata for all supported games
   cards_v2       — Card metadata with game-specific fields as nullable columns
 
 Both tables use synthetic UUID PKs. The business key is UNIQUE(game, external_id)
-which maps to Scrydex's native IDs (e.g. "base1", "OP13", "base1-4", "OP13-118").
+which maps to V2 API native IDs (e.g. "base1", "OP13", "base1-4", "OP13-118").
 """
 
 import uuid
