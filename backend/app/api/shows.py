@@ -29,6 +29,15 @@ from app.models.shows import CardShow, VendorShowRegistration
 router = APIRouter(tags=["shows"])
 
 
+class ShowVendorResponse(BaseModel):
+    vendor_profile_id: str
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class ShowResponse(BaseModel):
     id: str
     ontreasure_id: str
@@ -130,6 +139,32 @@ def get_show(show_id: str, db: Session = Depends(get_db)):
     if show is None:
         raise HTTPException(status_code=404, detail="Show not found")
     return _build_response(show)
+
+
+@router.get("/shows/{show_id}/vendors", response_model=List[ShowVendorResponse])
+def list_show_vendors(show_id: str, db: Session = Depends(get_db)):
+    """List vendors registered as attending a show."""
+    show = db.query(CardShow).filter(CardShow.id == show_id).first()
+    if show is None:
+        raise HTTPException(status_code=404, detail="Show not found")
+
+    rows = (
+        db.query(VendorProfile, Profile)
+        .join(VendorShowRegistration, VendorShowRegistration.vendor_profile_id == VendorProfile.id)
+        .join(Profile, Profile.id == VendorProfile.profile_id)
+        .filter(VendorShowRegistration.show_id == show_id)
+        .order_by(Profile.display_name.asc())
+        .all()
+    )
+    return [
+        {
+            "vendor_profile_id": vendor.id,
+            "display_name": profile.display_name,
+            "avatar_url": profile.avatar_url,
+            "bio": vendor.bio,
+        }
+        for vendor, profile in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
