@@ -186,6 +186,87 @@ def parse_price(text: Optional[str]) -> Optional[str]:
     return m.group(0) if m else None
 
 
+# ── Zip code enrichment ──────────────────────────────────────────────────────
+
+def enrich_zip_codes(events: List[Dict]) -> List[Dict]:
+    """
+    Fill in missing zip_code values for scraped events.
+
+    Strategy (in priority order):
+      1. Skip events that already have a zip_code — never overwrite scraped data.
+      2. If address is present → Nominatim geocode → extract postcode (exact).
+      3. If city + state present → uszipcode city+state lookup → take first
+         result sorted by population (approximate but avoids multiple-zip ambiguity).
+      4. If nothing works → leave zip_code as None.
+
+    Nominatim is rate-limited to 1 req/sec per OSM usage policy. A 1.1s sleep
+    is inserted between each geocode call. Only events that actually need
+    geocoding (address present, zip absent) consume API calls.
+    """
+    import time
+    from geopy.geocoders import Nominatim
+    from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+    from uszipcode import SearchEngine
+
+    needs_geocode = [e for e in events if not e.get("zip_code") and e.get("address")]
+    needs_city_lookup = [
+        e for e in events
+        if not e.get("zip_code") and not e.get("address")
+        and e.get("city") and e.get("state")
+    ]
+
+    total_api = len(needs_geocode)
+    total_city = len(needs_city_lookup)
+    already_have = len(events) - total_api - total_city
+    print(
+        f"[ZIP] {already_have} already have zip | "
+        f"{total_api} need geocode | {total_city} need city lookup",
+        flush=True,
+    )
+
+    # ── Step 1: Nominatim geocoding for events with a full address ──
+    if needs_geocode:
+        geolocator = Nominatim(user_agent="cardops-show-scraper/1.0")
+        for i, event in enumerate(needs_geocode):
+            address = event["address"]
+            try:
+                location = geolocator.geocode(
+                    address,
+                    addressdetails=True,
+                    language="en",
+                    timeout=10,
+                )
+                if location and location.raw.get("address", {}).get("postcode"):
+                    raw_zip = location.raw["address"]["postcode"]
+                    # Nominatim may return extended zip (e.g. "08854-1234") — take first 5
+                    event["zip_code"] = raw_zip[:5]
+                    print(f"  [GEO] {address[:60]:<60} → {event['zip_code']}", flush=True)
+                else:
+                    print(f"  [GEO] No postcode returned for: {address[:60]}", flush=True)
+            except (GeocoderTimedOut, GeocoderServiceError) as exc:
+                print(f"  [GEO] Error for {address[:60]}: {exc}", flush=True)
+
+            # Respect Nominatim's 1 req/sec policy; skip sleep after last item
+            if i < len(needs_geocode) - 1:
+                time.sleep(1.1)
+
+    # ── Step 2: uszipcode city+state fallback ──
+    if needs_city_lookup:
+        with SearchEngine() as search:
+            for event in needs_city_lookup:
+                city = event["city"]
+                state = event["state"]
+                results = search.by_city_and_state(city, state, returns=5)
+                if results:
+                    # Results are sorted by population descending — most central zip first
+                    event["zip_code"] = results[0].zipcode
+                    print(f"  [USZ] {city}, {state} → {event['zip_code']}", flush=True)
+                else:
+                    print(f"  [USZ] No zip found for: {city}, {state}", flush=True)
+
+    return events
+
+
 # ── Listing page scraping ────────────────────────────────────────────────────
 
 def parse_event_anchors(html: str, exclude_slugs: Optional[Set[str]] = None) -> List[Dict]:
@@ -737,6 +818,8 @@ def scrape_and_save(days: int = 90) -> Dict:
 
     if not events:
         return {"scraped": 0, "upserted": 0, "skipped": 0}
+
+    events = enrich_zip_codes(events)
 
     with SessionLocal() as session:
         result = upsert_shows(events, session)
