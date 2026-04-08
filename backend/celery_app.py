@@ -24,6 +24,8 @@ app = Celery(
         "app.tasks.scan_pipeline",
         # V2 API catalog sync tasks — active catalog source
         "app.tasks.catalog_sync_v2",
+        # Card show scrape tasks
+        "app.tasks.shows_sync",
     ],
 )
 
@@ -53,6 +55,12 @@ app.conf.update(
         "v2-api-full-sync": {
             "task": "v2_api.full_sync",
             "schedule": crontab(hour=4, minute=0, day_of_week=0),  # Sunday 4am UTC
+        },
+
+        # Weekly OnTreasure card show scrape
+        "shows-scrape-ontreasure": {
+            "task": "shows.scrape_ontreasure",
+            "schedule": crontab(hour=4, minute=0, day_of_week=1),  # every Monday 4am UTC
         },
 
         # v2_api.refresh_prices is NOT scheduled here — Phase 2 activation pending.
