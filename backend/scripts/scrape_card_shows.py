@@ -79,8 +79,17 @@ STATE_ABBREVS = {
 def parse_address(full_address: Optional[str]) -> Dict[str, Optional[str]]:
     """
     Parse a full address string into components.
-    Input:  "151 Webster Square Rd, Berlin, CT 06037, USA"
-    Output: {street, city, state, zip_code}
+
+    Handles both standard 3-part US addresses and Google Maps format addresses
+    that prepend the venue name as an extra leading component:
+
+      "151 Webster Square Rd, Berlin, CT 06037, USA"                   → 3 parts
+      "Embassy Suites ..., Centennial Ave, Piscataway, NJ, USA"        → 4 parts
+
+    Strategy: locate the state abbreviation searching from the END of the
+    comma-separated parts, then assign city and street by working backwards.
+    This is robust regardless of how many leading components appear before the
+    street address.
     """
     if not full_address:
         return {"street": None, "city": None, "state": None, "zip_code": None}
@@ -92,32 +101,35 @@ def parse_address(full_address: Optional[str]) -> Dict[str, Optional[str]]:
     zip_match = re.search(r"\b(\d{5})(?:-\d{4})?\b", addr)
     zip_code = zip_match.group(1) if zip_match else None
 
-    # Split into parts on comma
     parts = [p.strip() for p in addr.split(",")]
 
     street, city, state = None, None, None
 
-    if len(parts) >= 3:
-        street = parts[0]
-        city = parts[1]
-        # State is usually in the third part, possibly with ZIP attached
-        state_part = parts[2].strip()
-        for token in state_part.split():
+    # Find state working backwards from the last part
+    state_idx = None
+    for i in range(len(parts) - 1, -1, -1):
+        for token in parts[i].split():
             if token.upper() in STATE_ABBREVS:
                 state = token.upper()
+                state_idx = i
                 break
-    elif len(parts) == 2:
-        street = parts[0]
-        # Could be "City, ST 12345"
-        state_part = parts[1].strip()
-        tokens = state_part.split()
-        for i, token in enumerate(tokens):
-            if token.upper() in STATE_ABBREVS:
-                state = token.upper()
-                city = " ".join(tokens[:i]) if i > 0 else None
-                break
-    elif len(parts) == 1:
-        street = parts[0]
+        if state_idx is not None:
+            break
+
+    if state_idx is not None:
+        # City is immediately before the state part
+        if state_idx >= 1:
+            city = parts[state_idx - 1]
+        # Street is immediately before city
+        if state_idx >= 2:
+            street = parts[state_idx - 2]
+    else:
+        # No state found — fall back to positional assignment
+        if len(parts) >= 2:
+            street = parts[0]
+            city = parts[1]
+        elif len(parts) == 1:
+            street = parts[0]
 
     return {
         "street": street,
@@ -405,34 +417,81 @@ DETAIL_EXTRACT_JS = """
         return [...document.querySelectorAll(selector)].map(el => el.textContent.trim());
     };
 
-    // Venue name: the <span> directly before the address div
-    // Address div has class 'text-xs text-muted-foreground'
-    // We find all such divs and the first one containing a real address (has digits)
+    // Venue name + address extraction.
+    //
+    // The address appears in a div with class 'text-xs text-muted-foreground'.
+    // It always ends with a US state abbreviation and/or "USA".
+    // We previously filtered on /\d/ (digits) which breaks for named roads like
+    // "Centennial Avenue, Piscataway, NJ, USA" that have no street number.
+    //
+    // New strategy: match any div whose text ends with a known pattern:
+    //   ", ST"  |  ", ST, USA"  |  ", USA"  |  contains ", USA"
+    // This is more reliable than requiring digits.
+    const STATE_ABBREVS = new Set([
+        'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN',
+        'IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV',
+        'NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN',
+        'TX','UT','VT','VA','WA','WV','WI','WY','DC',
+    ]);
+
+    const looksLikeAddress = (text) => {
+        if (!text || text.length < 5) return false;
+        if (text.includes(', USA') || text.includes(',USA')) return true;
+        // ends with ", ST" or ", ST ZIPCODE"
+        const m = text.match(/,\\s*([A-Z]{2})(?:\\s+\\d{5})?\\s*$/);
+        if (m && STATE_ABBREVS.has(m[1])) return true;
+        return false;
+    };
+
     const addressDivs = [...document.querySelectorAll('div.text-xs.text-muted-foreground')]
-        .filter(el => /\\d/.test(el.textContent));
-    const addressDiv = addressDivs[0] || null;
+        .filter(el => looksLikeAddress(el.textContent.trim()));
+
+    // Also check 'div.text-sm.text-muted-foreground' used in the Event Location section
+    const addressDivsFallback = [...document.querySelectorAll('div.text-sm.text-muted-foreground')]
+        .filter(el => looksLikeAddress(el.textContent.trim()));
+
+    const addressDiv = addressDivs[0] || addressDivsFallback[0] || null;
     const address = addressDiv ? addressDiv.textContent.trim() : null;
 
-    // Venue name is in a <span> that's a sibling or nearby ancestor of the address div
+    // Venue name: look for a <span> that is a sibling or near-sibling of the address div.
+    // The venue span has no unique class — we find it by proximity.
     let venueName = null;
     if (addressDiv) {
-        // Walk up to find a container, then look for a sibling <span>
         const parent = addressDiv.parentElement;
         if (parent) {
-            const spans = parent.querySelectorAll('span');
+            // Prefer a direct child span of the same parent
+            const spans = [...parent.querySelectorAll(':scope > span')]
+                .filter(s => s.textContent.trim().length > 0);
             if (spans.length > 0) {
                 venueName = spans[0].textContent.trim();
             }
+            // Fallback: any span in the parent that isn't the address itself
+            if (!venueName) {
+                const anySpan = [...parent.querySelectorAll('span')]
+                    .find(s => s.textContent.trim().length > 0
+                              && !looksLikeAddress(s.textContent.trim()));
+                if (anySpan) venueName = anySpan.textContent.trim();
+            }
         }
-        // Fallback: look for a preceding sibling
+        // Fallback: walk back through previous siblings looking for a <span>
         if (!venueName) {
             let prev = addressDiv.previousElementSibling;
             while (prev) {
-                if (prev.tagName === 'SPAN') {
+                if (prev.tagName === 'SPAN' && prev.textContent.trim().length > 0) {
                     venueName = prev.textContent.trim();
                     break;
                 }
                 prev = prev.previousElementSibling;
+            }
+        }
+        // Last resort: check the parent's previous sibling for a span
+        if (!venueName && addressDiv.parentElement) {
+            let prevParent = addressDiv.parentElement.previousElementSibling;
+            if (prevParent) {
+                const s = prevParent.querySelector('span');
+                if (s && s.textContent.trim().length > 0) {
+                    venueName = s.textContent.trim();
+                }
             }
         }
     }
