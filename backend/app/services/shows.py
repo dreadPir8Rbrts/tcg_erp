@@ -127,6 +127,8 @@ def upsert_shows(events: List[Dict], session: Session) -> Dict:
             "city": stmt.excluded.city,
             "state": stmt.excluded.state,
             "zip_code": stmt.excluded.zip_code,
+            "latitude": stmt.excluded.latitude,
+            "longitude": stmt.excluded.longitude,
             "description": stmt.excluded.description,
             "tags": stmt.excluded.tags,
             "organizer_name": stmt.excluded.organizer_name,

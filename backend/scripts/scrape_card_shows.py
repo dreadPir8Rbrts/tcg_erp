@@ -79,8 +79,17 @@ STATE_ABBREVS = {
 def parse_address(full_address: Optional[str]) -> Dict[str, Optional[str]]:
     """
     Parse a full address string into components.
-    Input:  "151 Webster Square Rd, Berlin, CT 06037, USA"
-    Output: {street, city, state, zip_code}
+
+    Handles both standard 3-part US addresses and Google Maps format addresses
+    that prepend the venue name as an extra leading component:
+
+      "151 Webster Square Rd, Berlin, CT 06037, USA"                   → 3 parts
+      "Embassy Suites ..., Centennial Ave, Piscataway, NJ, USA"        → 4 parts
+
+    Strategy: locate the state abbreviation searching from the END of the
+    comma-separated parts, then assign city and street by working backwards.
+    This is robust regardless of how many leading components appear before the
+    street address.
     """
     if not full_address:
         return {"street": None, "city": None, "state": None, "zip_code": None}
@@ -92,32 +101,35 @@ def parse_address(full_address: Optional[str]) -> Dict[str, Optional[str]]:
     zip_match = re.search(r"\b(\d{5})(?:-\d{4})?\b", addr)
     zip_code = zip_match.group(1) if zip_match else None
 
-    # Split into parts on comma
     parts = [p.strip() for p in addr.split(",")]
 
     street, city, state = None, None, None
 
-    if len(parts) >= 3:
-        street = parts[0]
-        city = parts[1]
-        # State is usually in the third part, possibly with ZIP attached
-        state_part = parts[2].strip()
-        for token in state_part.split():
+    # Find state working backwards from the last part
+    state_idx = None
+    for i in range(len(parts) - 1, -1, -1):
+        for token in parts[i].split():
             if token.upper() in STATE_ABBREVS:
                 state = token.upper()
+                state_idx = i
                 break
-    elif len(parts) == 2:
-        street = parts[0]
-        # Could be "City, ST 12345"
-        state_part = parts[1].strip()
-        tokens = state_part.split()
-        for i, token in enumerate(tokens):
-            if token.upper() in STATE_ABBREVS:
-                state = token.upper()
-                city = " ".join(tokens[:i]) if i > 0 else None
-                break
-    elif len(parts) == 1:
-        street = parts[0]
+        if state_idx is not None:
+            break
+
+    if state_idx is not None:
+        # City is immediately before the state part
+        if state_idx >= 1:
+            city = parts[state_idx - 1]
+        # Street is immediately before city
+        if state_idx >= 2:
+            street = parts[state_idx - 2]
+    else:
+        # No state found — fall back to positional assignment
+        if len(parts) >= 2:
+            street = parts[0]
+            city = parts[1]
+        elif len(parts) == 1:
+            street = parts[0]
 
     return {
         "street": street,
@@ -172,6 +184,128 @@ def parse_price(text: Optional[str]) -> Optional[str]:
         return None
     m = re.search(r"\$[\d,]+(?:\.\d{2})?", text)
     return m.group(0) if m else None
+
+
+# ── Zip code enrichment ──────────────────────────────────────────────────────
+
+def enrich_zip_codes(events: List[Dict]) -> List[Dict]:
+    """
+    Fill in missing zip_code, latitude, and longitude for scraped events using
+    Nominatim (OpenStreetMap). All three fields come from the same geocode call
+    so there is no additional API cost for lat/lon.
+
+    Strategy (in priority order):
+      1. Skip events that already have zip_code AND latitude AND longitude.
+      2. If address is present → geocode full address → exact postcode + coords.
+      3. If city + state present (no address) → geocode "City, ST, USA".
+      4. If neither → leave fields as None.
+
+    Within each geocode attempt a three-query fallback chain is used:
+      a. Full address / city query (primary)
+      b. "{street}, {city}, {state}, USA" — strips leading venue-name noise
+      c. "{city}, {state}, USA" — city-level last resort
+
+    Nominatim is rate-limited to 1 req/sec per OSM usage policy. A 1.1s sleep
+    is inserted between calls.
+    """
+    import time
+    from geopy.geocoders import Nominatim
+    from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+
+    def _needs_geocode(e: Dict) -> bool:
+        return not (e.get("zip_code") and e.get("latitude") and e.get("longitude"))
+
+    needs_address_geocode = [e for e in events if _needs_geocode(e) and e.get("address")]
+    needs_city_geocode = [
+        e for e in events
+        if _needs_geocode(e) and not e.get("address")
+        and e.get("city") and e.get("state")
+    ]
+    already_have = len(events) - len(needs_address_geocode) - len(needs_city_geocode)
+
+    print(
+        f"[GEO] {already_have} already complete | "
+        f"{len(needs_address_geocode)} need address geocode | "
+        f"{len(needs_city_geocode)} need city geocode",
+        flush=True,
+    )
+
+    to_geocode: List[Dict] = []
+    # Build list of (event, query_string) pairs
+    geocode_jobs: List[tuple] = []
+    for e in needs_address_geocode:
+        geocode_jobs.append((e, e["address"]))
+    for e in needs_city_geocode:
+        geocode_jobs.append((e, f"{e['city']}, {e['state']}, USA"))
+
+    if not geocode_jobs:
+        return events
+
+    geolocator = Nominatim(user_agent="cardops-show-scraper/1.0")
+
+    def _geocode_with_fallback(event: Dict, primary_query: str) -> None:
+        """
+        Try up to three Nominatim queries for one event, sleeping 1.1s between
+        each attempt to respect the 1 req/sec rate limit.
+
+        Attempt order:
+          1. Primary query (full address or "City, ST, USA")
+          2. "{street}, {city}, {state}, USA"  — strips leading venue-name noise
+          3. "{city}, {state}, USA"             — city-level last resort
+        """
+        city = event.get("city")
+        state = event.get("state")
+        street = event.get("street")
+
+        fallbacks: List[str] = [primary_query]
+        if street and city and state:
+            street_query = f"{street}, {city}, {state}, USA"
+            if street_query != primary_query:
+                fallbacks.append(street_query)
+        if city and state:
+            city_query = f"{city}, {state}, USA"
+            if city_query not in fallbacks:
+                fallbacks.append(city_query)
+
+        for attempt, query in enumerate(fallbacks):
+            if attempt > 0:
+                time.sleep(1.1)  # rate limit between attempts
+            try:
+                location = geolocator.geocode(
+                    query,
+                    addressdetails=True,
+                    language="en",
+                    timeout=10,
+                )
+                if location:
+                    postcode = location.raw.get("address", {}).get("postcode")
+                    if postcode and not event.get("zip_code"):
+                        event["zip_code"] = postcode[:5]
+                    if not event.get("latitude"):
+                        event["latitude"] = location.latitude
+                    if not event.get("longitude"):
+                        event["longitude"] = location.longitude
+                    label = ["full", "street", "city"][min(attempt, 2)]
+                    print(
+                        f"  [GEO:{label}] {query[:55]:<55} "
+                        f"zip={event.get('zip_code', '—')} "
+                        f"lat={round(location.latitude, 4)} "
+                        f"lon={round(location.longitude, 4)}",
+                        flush=True,
+                    )
+                    return
+            except (GeocoderTimedOut, GeocoderServiceError) as exc:
+                print(f"  [ZIP] Error on attempt {attempt + 1} for {query[:60]}: {exc}", flush=True)
+
+        print(f"  [GEO] No result for: {primary_query[:65]}", flush=True)
+
+    for i, (event, query) in enumerate(geocode_jobs):
+        _geocode_with_fallback(event, query)
+        # Rate limit between events (attempts within an event already sleep)
+        if i < len(geocode_jobs) - 1:
+            time.sleep(1.1)
+
+    return events
 
 
 # ── Listing page scraping ────────────────────────────────────────────────────
@@ -405,34 +539,81 @@ DETAIL_EXTRACT_JS = """
         return [...document.querySelectorAll(selector)].map(el => el.textContent.trim());
     };
 
-    // Venue name: the <span> directly before the address div
-    // Address div has class 'text-xs text-muted-foreground'
-    // We find all such divs and the first one containing a real address (has digits)
+    // Venue name + address extraction.
+    //
+    // The address appears in a div with class 'text-xs text-muted-foreground'.
+    // It always ends with a US state abbreviation and/or "USA".
+    // We previously filtered on /\d/ (digits) which breaks for named roads like
+    // "Centennial Avenue, Piscataway, NJ, USA" that have no street number.
+    //
+    // New strategy: match any div whose text ends with a known pattern:
+    //   ", ST"  |  ", ST, USA"  |  ", USA"  |  contains ", USA"
+    // This is more reliable than requiring digits.
+    const STATE_ABBREVS = new Set([
+        'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN',
+        'IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV',
+        'NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN',
+        'TX','UT','VT','VA','WA','WV','WI','WY','DC',
+    ]);
+
+    const looksLikeAddress = (text) => {
+        if (!text || text.length < 5) return false;
+        if (text.includes(', USA') || text.includes(',USA')) return true;
+        // ends with ", ST" or ", ST ZIPCODE"
+        const m = text.match(/,\\s*([A-Z]{2})(?:\\s+\\d{5})?\\s*$/);
+        if (m && STATE_ABBREVS.has(m[1])) return true;
+        return false;
+    };
+
     const addressDivs = [...document.querySelectorAll('div.text-xs.text-muted-foreground')]
-        .filter(el => /\\d/.test(el.textContent));
-    const addressDiv = addressDivs[0] || null;
+        .filter(el => looksLikeAddress(el.textContent.trim()));
+
+    // Also check 'div.text-sm.text-muted-foreground' used in the Event Location section
+    const addressDivsFallback = [...document.querySelectorAll('div.text-sm.text-muted-foreground')]
+        .filter(el => looksLikeAddress(el.textContent.trim()));
+
+    const addressDiv = addressDivs[0] || addressDivsFallback[0] || null;
     const address = addressDiv ? addressDiv.textContent.trim() : null;
 
-    // Venue name is in a <span> that's a sibling or nearby ancestor of the address div
+    // Venue name: look for a <span> that is a sibling or near-sibling of the address div.
+    // The venue span has no unique class — we find it by proximity.
     let venueName = null;
     if (addressDiv) {
-        // Walk up to find a container, then look for a sibling <span>
         const parent = addressDiv.parentElement;
         if (parent) {
-            const spans = parent.querySelectorAll('span');
+            // Prefer a direct child span of the same parent
+            const spans = [...parent.querySelectorAll(':scope > span')]
+                .filter(s => s.textContent.trim().length > 0);
             if (spans.length > 0) {
                 venueName = spans[0].textContent.trim();
             }
+            // Fallback: any span in the parent that isn't the address itself
+            if (!venueName) {
+                const anySpan = [...parent.querySelectorAll('span')]
+                    .find(s => s.textContent.trim().length > 0
+                              && !looksLikeAddress(s.textContent.trim()));
+                if (anySpan) venueName = anySpan.textContent.trim();
+            }
         }
-        // Fallback: look for a preceding sibling
+        // Fallback: walk back through previous siblings looking for a <span>
         if (!venueName) {
             let prev = addressDiv.previousElementSibling;
             while (prev) {
-                if (prev.tagName === 'SPAN') {
+                if (prev.tagName === 'SPAN' && prev.textContent.trim().length > 0) {
                     venueName = prev.textContent.trim();
                     break;
                 }
                 prev = prev.previousElementSibling;
+            }
+        }
+        // Last resort: check the parent's previous sibling for a span
+        if (!venueName && addressDiv.parentElement) {
+            let prevParent = addressDiv.parentElement.previousElementSibling;
+            if (prevParent) {
+                const s = prevParent.querySelector('span');
+                if (s && s.textContent.trim().length > 0) {
+                    venueName = s.textContent.trim();
+                }
             }
         }
     }
@@ -678,6 +859,8 @@ def scrape_and_save(days: int = 90) -> Dict:
 
     if not events:
         return {"scraped": 0, "upserted": 0, "skipped": 0}
+
+    events = enrich_zip_codes(events)
 
     with SessionLocal() as session:
         result = upsert_shows(events, session)
