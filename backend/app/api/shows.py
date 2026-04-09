@@ -9,6 +9,7 @@ Routes (public):
 Routes (authenticated — any profile):
   POST   /shows/{show_id}/register   — register the current user for a show
   DELETE /shows/{show_id}/register   — unregister the current user from a show
+  GET    /profile/shows/registered   — shows the current user is attending (any role)
 
 Routes (authenticated vendor):
   GET  /vendor/shows/registered    — shows the current vendor is attending
@@ -296,6 +297,29 @@ def unregister_from_show(
 
     db.delete(reg)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Authenticated routes — any profile
+# ---------------------------------------------------------------------------
+
+@router.get("/profile/shows/registered", response_model=List[ShowResponse])
+def list_my_registered_shows(
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+):
+    """List upcoming shows the current user is registered for, regardless of role."""
+    shows = (
+        db.query(CardShow)
+        .join(ProfileShowRegistration, ProfileShowRegistration.show_id == CardShow.id)
+        .filter(
+            ProfileShowRegistration.profile_id == profile.id,
+            CardShow.date_start >= date.today(),
+        )
+        .order_by(CardShow.date_start.asc())
+        .all()
+    )
+    return [_build_response(s) for s in shows]
 
 
 # ---------------------------------------------------------------------------
