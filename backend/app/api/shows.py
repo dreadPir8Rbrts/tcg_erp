@@ -13,11 +13,11 @@ Routes (authenticated vendor):
 
 import uuid
 from datetime import date
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import and_
+from sqlalchemy import and_, text
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -25,6 +25,44 @@ from app.dependencies import get_current_profile
 from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
 from app.models.shows import CardShow, VendorShowRegistration
+
+# ---------------------------------------------------------------------------
+# Zip code → lat/lon resolution (module-level cache, lives for process lifetime)
+# ---------------------------------------------------------------------------
+
+_zip_cache: Dict[str, Tuple[float, float]] = {}
+
+
+def _resolve_zip(zip_code: str) -> Optional[Tuple[float, float]]:
+    """
+    Resolve a US zip code to (latitude, longitude) via Nominatim.
+    Results are cached in-process so repeated searches for the same zip
+    cost only one network call.
+    """
+    key = zip_code.strip()
+    if key in _zip_cache:
+        return _zip_cache[key]
+
+    try:
+        from geopy.geocoders import Nominatim
+        from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+
+        geolocator = Nominatim(user_agent="cardops-api/1.0")
+        location = geolocator.geocode(
+            f"{key}, USA",
+            addressdetails=False,
+            language="en",
+            timeout=10,
+        )
+        if location:
+            coords = (location.latitude, location.longitude)
+            _zip_cache[key] = coords
+            return coords
+    except Exception:
+        pass
+
+    return None
+
 
 router = APIRouter(tags=["shows"])
 
@@ -100,6 +138,10 @@ def list_shows(
     state: Optional[str] = Query(None, description="Filter by 2-letter state abbreviation e.g. NY"),
     from_date: Optional[date] = Query(None, description="Shows starting on or after this date"),
     until_date: Optional[date] = Query(None, description="Shows starting on or before this date"),
+    zip_code: Optional[str] = Query(None, description="Filter shows within radius_miles of this US zip code"),
+    latitude: Optional[float] = Query(None, description="Filter shows within radius_miles of this latitude"),
+    longitude: Optional[float] = Query(None, description="Filter shows within radius_miles of this longitude"),
+    radius_miles: float = Query(50.0, ge=1, le=500, description="Radius in miles for location filter"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -113,6 +155,35 @@ def list_shows(
         filters.append(CardShow.state == state.upper())
     if until_date:
         filters.append(CardShow.date_start <= until_date)
+
+    # Resolve zip code to coordinates if provided
+    center_lat: Optional[float] = latitude
+    center_lon: Optional[float] = longitude
+
+    if zip_code and (center_lat is None or center_lon is None):
+        coords = _resolve_zip(zip_code)
+        if coords is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Could not resolve zip code: {zip_code}",
+            )
+        center_lat, center_lon = coords
+
+    # Apply haversine distance filter when coordinates are available
+    # Formula: 3959 * acos(cos(lat1)*cos(lat2)*cos(lon2-lon1) + sin(lat1)*sin(lat2)) <= radius
+    # Only includes shows that have lat/lon populated.
+    if center_lat is not None and center_lon is not None:
+        haversine = text(
+            "latitude IS NOT NULL AND longitude IS NOT NULL AND "
+            "3959 * acos("
+            "  LEAST(1.0, "
+            "    cos(radians(:lat)) * cos(radians(latitude)) "
+            "    * cos(radians(longitude) - radians(:lon)) "
+            "    + sin(radians(:lat)) * sin(radians(latitude))"
+            "  )"
+            ") <= :radius"
+        ).bindparams(lat=center_lat, lon=center_lon, radius=radius_miles)
+        filters.append(haversine)
 
     shows = (
         db.query(CardShow)
