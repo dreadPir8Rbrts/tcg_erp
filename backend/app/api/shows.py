@@ -29,7 +29,6 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.dependencies import get_current_profile
-from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
 from app.models.shows import CardShow, ProfileShowRegistration
 
@@ -222,9 +221,8 @@ def list_show_attendees(show_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Show not found")
 
     rows = (
-        db.query(Profile, VendorProfile)
+        db.query(Profile, ProfileShowRegistration)
         .join(ProfileShowRegistration, ProfileShowRegistration.profile_id == Profile.id)
-        .outerjoin(VendorProfile, VendorProfile.profile_id == Profile.id)
         .filter(ProfileShowRegistration.show_id == show_id)
         .order_by(Profile.display_name.asc())
         .all()
@@ -234,10 +232,10 @@ def list_show_attendees(show_id: str, db: Session = Depends(get_db)):
             "profile_id": profile.id,
             "display_name": profile.display_name,
             "avatar_url": profile.avatar_url,
-            "bio": vendor.bio if vendor else None,
-            "role": profile.role,
+            "bio": profile.bio,
+            "role": reg.attending_as or profile.role,
         }
-        for profile, vendor in rows
+        for profile, reg in rows
     ]
 
 
@@ -245,9 +243,14 @@ def list_show_attendees(show_id: str, db: Session = Depends(get_db)):
 # Authenticated routes — any profile (vendor or collector)
 # ---------------------------------------------------------------------------
 
+class RegisterForShowRequest(BaseModel):
+    attending_as: Optional[str] = None  # 'vendor' | 'collector' — defaults to profile.role
+
+
 @router.post("/shows/{show_id}/register", status_code=status.HTTP_201_CREATED)
 def register_for_show(
     show_id: str,
+    body: RegisterForShowRequest = RegisterForShowRequest(),
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ):
@@ -255,6 +258,13 @@ def register_for_show(
     show = db.query(CardShow).filter(CardShow.id == show_id).first()
     if show is None:
         raise HTTPException(status_code=404, detail="Show not found")
+
+    attending_as = body.attending_as or profile.role
+    if attending_as not in ("vendor", "collector"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="attending_as must be 'vendor' or 'collector'",
+        )
 
     existing = (
         db.query(ProfileShowRegistration)
@@ -271,6 +281,7 @@ def register_for_show(
         id=str(uuid.uuid4()),
         profile_id=profile.id,
         show_id=show_id,
+        attending_as=attending_as,
     )
     db.add(reg)
     db.commit()
@@ -331,8 +342,8 @@ def list_vendor_registered_shows(
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ):
-    """List upcoming shows the authenticated vendor (or both-role user) is registered for."""
-    if profile.role not in ("vendor", "both"):
+    """List upcoming shows the authenticated vendor is registered for."""
+    if profile.role != "vendor":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Vendor profile required",
@@ -359,8 +370,8 @@ def list_collector_registered_shows(
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ):
-    """List upcoming shows the authenticated collector (or both-role user) is registered for."""
-    if profile.role not in ("collector", "both"):
+    """List upcoming shows the authenticated collector is registered for."""
+    if profile.role != "collector":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Collector profile required",

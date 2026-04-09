@@ -2,12 +2,14 @@
 Profile endpoints — onboarding and profile management.
 
 Routes:
-  PATCH /profiles/me          — update own profile (role, display_name, interests, zip, avatar, onboarding_complete)
-  POST  /profiles/me/vendor   — create vendor_profiles row for the current user
-  POST  /profiles/me/avatar   — upload avatar image to S3, return avatar_url
+  GET   /profiles/me            — get own profile
+  PATCH /profiles/me            — update own profile (role, display_name, bio, interests, zip, avatar, rates, onboarding_complete)
+  POST  /profiles/me/background — upload background image to S3
+  POST  /profiles/me/avatar     — upload avatar image to S3
 """
 
 import uuid as uuid_module
+from decimal import Decimal
 from typing import Optional, List, Dict, Any
 
 import boto3
@@ -17,21 +19,24 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
-from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
 
 router = APIRouter(tags=["profiles"])
 
-_VALID_ROLES = {"vendor", "collector", "both"}
+_VALID_ROLES = {"vendor", "collector"}
 
 
 class ProfileUpdate(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=50)
     role: Optional[str] = None
+    bio: Optional[str] = None
     tcg_interests: Optional[List[str]] = None
     zip_code: Optional[str] = Field(None, pattern=r"^\d{5}$")
     avatar_url: Optional[str] = None
     onboarding_complete: Optional[bool] = None
+    buying_rate: Optional[Decimal] = Field(None, ge=0, le=1)
+    trade_rate: Optional[Decimal] = Field(None, ge=0, le=1)
+    is_accounting_enabled: Optional[bool] = None
 
 
 def _profile_response(profile: Profile) -> Dict[str, Any]:
@@ -39,11 +44,15 @@ def _profile_response(profile: Profile) -> Dict[str, Any]:
         "id": profile.id,
         "role": profile.role,
         "display_name": profile.display_name,
+        "bio": profile.bio,
         "tcg_interests": profile.tcg_interests,
         "onboarding_complete": profile.onboarding_complete,
         "zip_code": profile.zip_code,
         "avatar_url": profile.avatar_url,
         "background_url": profile.background_url,
+        "buying_rate": profile.buying_rate,
+        "trade_rate": profile.trade_rate,
+        "is_accounting_enabled": profile.is_accounting_enabled,
     }
 
 
@@ -79,26 +88,6 @@ def update_profile(
     db.commit()
     db.refresh(profile)
     return _profile_response(profile)
-
-
-@router.post("/profiles/me/vendor", status_code=status.HTTP_201_CREATED)
-def create_vendor_profile(
-    profile: Profile = Depends(get_current_profile),
-    db: Session = Depends(get_db),
-) -> Dict[str, Any]:
-    """Create a vendor_profiles row for the authenticated user. Idempotent."""
-    existing = db.query(VendorProfile).filter(VendorProfile.profile_id == profile.id).first()
-    if existing:
-        return {"message": "vendor profile already exists"}
-
-    vendor = VendorProfile(
-        id=str(uuid_module.uuid4()),
-        profile_id=profile.id,
-        is_accounting_enabled=False,
-    )
-    db.add(vendor)
-    db.commit()
-    return {"message": "vendor profile created"}
 
 
 @router.post("/profiles/me/background")

@@ -75,7 +75,7 @@ class TransactionCard(Base):
     )
     inventory_item_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("public.vendor_inventory.id", ondelete="SET NULL"),
+        ForeignKey("public.inventory.id", ondelete="SET NULL"),
         nullable=True,
     )
     condition_type: Mapped[str] = mapped_column(String(10), nullable=False)

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.dependencies import get_current_profile
 from app.models.catalog_v2 import CardV2
-from app.models.inventory import VendorInventory
+from app.models.inventory import Inventory
 from app.models.profiles import Profile
 from app.models.transactions import Transaction, TransactionCard
 
@@ -266,9 +266,9 @@ def create_transaction(
             and c.inventory_item_id
             and inventory_status
         ):
-            inv = db.query(VendorInventory).filter(
-                VendorInventory.id == c.inventory_item_id,
-                VendorInventory.profile_id == profile.id,
+            inv = db.query(Inventory).filter(
+                Inventory.id == c.inventory_item_id,
+                Inventory.profile_id == profile.id,
             ).first()
             if inv:
                 inv.status = inventory_status

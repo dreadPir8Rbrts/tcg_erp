@@ -1,5 +1,5 @@
 """
-Pydantic v2 request/response schemas for vendor profiles and inventory.
+Pydantic v2 request/response schemas for inventory.
 """
 
 from datetime import datetime
@@ -7,34 +7,6 @@ from decimal import Decimal
 from typing import Optional, List, Literal
 
 from pydantic import BaseModel, Field, model_validator
-
-
-# ---------------------------------------------------------------------------
-# Vendor profile
-# ---------------------------------------------------------------------------
-
-class VendorProfileCreate(BaseModel):
-    bio: Optional[str] = None
-    buying_rate: Optional[Decimal] = Field(None, ge=0, le=1)
-    trade_rate: Optional[Decimal] = Field(None, ge=0, le=1)
-
-
-class VendorProfileUpdate(BaseModel):
-    bio: Optional[str] = None
-    buying_rate: Optional[Decimal] = Field(None, ge=0, le=1)
-    trade_rate: Optional[Decimal] = Field(None, ge=0, le=1)
-
-
-class VendorProfileResponse(BaseModel):
-    id: str
-    profile_id: str
-    bio: Optional[str]
-    buying_rate: Optional[Decimal]
-    trade_rate: Optional[Decimal]
-    is_accounting_enabled: bool
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +29,7 @@ class InventoryItemCreate(BaseModel):
     grade: Optional[str] = None
     grading_company_other: Optional[str] = None
     quantity: int = Field(1, ge=1)
-    cost_basis: Optional[Decimal] = Field(None, ge=0)
+    acquired_price: Optional[Decimal] = Field(None, ge=0)
     asking_price: Optional[Decimal] = Field(None, ge=0)
     is_for_sale: bool = True
     is_for_trade: bool = False
@@ -96,7 +68,7 @@ class InventoryItemResponse(BaseModel):
     grade: Optional[str]
     grading_company_other: Optional[str]
     quantity: int
-    cost_basis: Optional[Decimal]
+    acquired_price: Optional[Decimal]
     asking_price: Optional[Decimal]
     is_for_sale: bool
     is_for_trade: bool

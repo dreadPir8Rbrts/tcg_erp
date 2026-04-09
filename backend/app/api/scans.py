@@ -34,7 +34,6 @@ import celery_app as _celery_module
 from app.db.session import get_db, SessionLocal, settings
 from app.dependencies import get_current_profile
 from app.models.catalog_v2 import CardV2, ExpansionV2
-from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
 from app.models.scans import ScanJob
 
@@ -221,7 +220,7 @@ async def identify_card(
     if action not in VALID_ACTIONS:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid action '{action}'")
 
-    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
+    _require_vendor(profile)  # ensure vendor profile exists
     image_bytes = await image.read()
 
     # Cache check — instant return for repeat scans of the same card
@@ -321,11 +320,10 @@ class ScanJobResponse(BaseModel):
 VALID_ACTIONS = {"add_inventory", "log_sale", "log_purchase", "log_trade"}
 
 
-def _get_vendor_or_404(profile: Profile, db: Session) -> VendorProfile:
-    vendor = db.query(VendorProfile).filter(VendorProfile.profile_id == profile.id).first()
-    if vendor is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor profile not found")
-    return vendor
+def _require_vendor(profile: Profile) -> None:
+    """Raise 403 if the profile is not currently in vendor mode."""
+    if profile.role != "vendor":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Vendor role required")
 
 
 def _generate_presigned_put_url(s3_key: str, content_type: str) -> str:
@@ -375,7 +373,7 @@ def create_scan_job(
     if body.action not in VALID_ACTIONS:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid action '{body.action}'")
 
-    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
+    _require_vendor(profile)  # ensure vendor profile exists
     job_id = str(uuid.uuid4())
     s3_key = f"scans/{profile.id}/{job_id}.jpg"
 
@@ -411,7 +409,7 @@ def trigger_scan_job(
     Called by the client after the image has been uploaded to S3.
     Dispatches the Celery scan task.
     """
-    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
+    _require_vendor(profile)  # ensure vendor profile exists
     job = db.get(ScanJob, scan_job_id)
 
     if job is None or job.profile_id != profile.id:
@@ -430,7 +428,7 @@ def get_scan_job(
     db: Session = Depends(get_db),
 ) -> ScanJob:
     """Poll scan job status and result."""
-    _get_vendor_or_404(profile, db)  # ensure vendor profile exists
+    _require_vendor(profile)  # ensure vendor profile exists
     job = db.get(ScanJob, scan_job_id)
 
     if job is None or job.profile_id != profile.id:
