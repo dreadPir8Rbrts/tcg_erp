@@ -190,79 +190,99 @@ def parse_price(text: Optional[str]) -> Optional[str]:
 
 def enrich_zip_codes(events: List[Dict]) -> List[Dict]:
     """
-    Fill in missing zip_code values for scraped events.
+    Fill in missing zip_code values for scraped events using Nominatim (OpenStreetMap).
 
     Strategy (in priority order):
       1. Skip events that already have a zip_code — never overwrite scraped data.
-      2. If address is present → Nominatim geocode → extract postcode (exact).
-      3. If city + state present → uszipcode city+state lookup → take first
-         result sorted by population (approximate but avoids multiple-zip ambiguity).
-      4. If nothing works → leave zip_code as None.
+      2. If address is present → geocode full address → exact postcode.
+      3. If city + state present (no address) → geocode "City, ST, USA" → approximate postcode.
+      4. If neither → leave zip_code as None.
 
     Nominatim is rate-limited to 1 req/sec per OSM usage policy. A 1.1s sleep
-    is inserted between each geocode call. Only events that actually need
-    geocoding (address present, zip absent) consume API calls.
+    is inserted between calls. Only events missing a zip consume API calls.
     """
     import time
     from geopy.geocoders import Nominatim
     from geopy.exc import GeocoderTimedOut, GeocoderServiceError
-    from uszipcode import SearchEngine
 
-    needs_geocode = [e for e in events if not e.get("zip_code") and e.get("address")]
-    needs_city_lookup = [
+    needs_address_geocode = [e for e in events if not e.get("zip_code") and e.get("address")]
+    needs_city_geocode = [
         e for e in events
         if not e.get("zip_code") and not e.get("address")
         and e.get("city") and e.get("state")
     ]
+    already_have = len(events) - len(needs_address_geocode) - len(needs_city_geocode)
 
-    total_api = len(needs_geocode)
-    total_city = len(needs_city_lookup)
-    already_have = len(events) - total_api - total_city
     print(
         f"[ZIP] {already_have} already have zip | "
-        f"{total_api} need geocode | {total_city} need city lookup",
+        f"{len(needs_address_geocode)} need address geocode | "
+        f"{len(needs_city_geocode)} need city geocode",
         flush=True,
     )
 
-    # ── Step 1: Nominatim geocoding for events with a full address ──
-    if needs_geocode:
-        geolocator = Nominatim(user_agent="cardops-show-scraper/1.0")
-        for i, event in enumerate(needs_geocode):
-            address = event["address"]
+    to_geocode: List[Dict] = []
+    # Build list of (event, query_string) pairs
+    geocode_jobs: List[tuple] = []
+    for e in needs_address_geocode:
+        geocode_jobs.append((e, e["address"]))
+    for e in needs_city_geocode:
+        geocode_jobs.append((e, f"{e['city']}, {e['state']}, USA"))
+
+    if not geocode_jobs:
+        return events
+
+    geolocator = Nominatim(user_agent="cardops-show-scraper/1.0")
+
+    def _geocode_with_fallback(event: Dict, primary_query: str) -> None:
+        """
+        Try up to three Nominatim queries for one event, sleeping 1.1s between
+        each attempt to respect the 1 req/sec rate limit.
+
+        Attempt order:
+          1. Primary query (full address or "City, ST, USA")
+          2. "{street}, {city}, {state}, USA"  — strips leading venue-name noise
+          3. "{city}, {state}, USA"             — city-level last resort
+        """
+        city = event.get("city")
+        state = event.get("state")
+        street = event.get("street")
+
+        fallbacks: List[str] = [primary_query]
+        if street and city and state:
+            street_query = f"{street}, {city}, {state}, USA"
+            if street_query != primary_query:
+                fallbacks.append(street_query)
+        if city and state:
+            city_query = f"{city}, {state}, USA"
+            if city_query not in fallbacks:
+                fallbacks.append(city_query)
+
+        for attempt, query in enumerate(fallbacks):
+            if attempt > 0:
+                time.sleep(1.1)  # rate limit between attempts
             try:
                 location = geolocator.geocode(
-                    address,
+                    query,
                     addressdetails=True,
                     language="en",
                     timeout=10,
                 )
                 if location and location.raw.get("address", {}).get("postcode"):
                     raw_zip = location.raw["address"]["postcode"]
-                    # Nominatim may return extended zip (e.g. "08854-1234") — take first 5
                     event["zip_code"] = raw_zip[:5]
-                    print(f"  [GEO] {address[:60]:<60} → {event['zip_code']}", flush=True)
-                else:
-                    print(f"  [GEO] No postcode returned for: {address[:60]}", flush=True)
+                    label = ["full", "street", "city"][min(attempt, 2)]
+                    print(f"  [ZIP:{label}] {query[:60]:<60} → {event['zip_code']}", flush=True)
+                    return
             except (GeocoderTimedOut, GeocoderServiceError) as exc:
-                print(f"  [GEO] Error for {address[:60]}: {exc}", flush=True)
+                print(f"  [ZIP] Error on attempt {attempt + 1} for {query[:60]}: {exc}", flush=True)
 
-            # Respect Nominatim's 1 req/sec policy; skip sleep after last item
-            if i < len(needs_geocode) - 1:
-                time.sleep(1.1)
+        print(f"  [ZIP] No postcode found for: {primary_query[:65]}", flush=True)
 
-    # ── Step 2: uszipcode city+state fallback ──
-    if needs_city_lookup:
-        with SearchEngine() as search:
-            for event in needs_city_lookup:
-                city = event["city"]
-                state = event["state"]
-                results = search.by_city_and_state(city, state, returns=5)
-                if results:
-                    # Results are sorted by population descending — most central zip first
-                    event["zip_code"] = results[0].zipcode
-                    print(f"  [USZ] {city}, {state} → {event['zip_code']}", flush=True)
-                else:
-                    print(f"  [USZ] No zip found for: {city}, {state}", flush=True)
+    for i, (event, query) in enumerate(geocode_jobs):
+        _geocode_with_fallback(event, query)
+        # Rate limit between events (attempts within an event already sleep)
+        if i < len(geocode_jobs) - 1:
+            time.sleep(1.1)
 
     return events
 
