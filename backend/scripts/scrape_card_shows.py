@@ -190,31 +190,41 @@ def parse_price(text: Optional[str]) -> Optional[str]:
 
 def enrich_zip_codes(events: List[Dict]) -> List[Dict]:
     """
-    Fill in missing zip_code values for scraped events using Nominatim (OpenStreetMap).
+    Fill in missing zip_code, latitude, and longitude for scraped events using
+    Nominatim (OpenStreetMap). All three fields come from the same geocode call
+    so there is no additional API cost for lat/lon.
 
     Strategy (in priority order):
-      1. Skip events that already have a zip_code — never overwrite scraped data.
-      2. If address is present → geocode full address → exact postcode.
-      3. If city + state present (no address) → geocode "City, ST, USA" → approximate postcode.
-      4. If neither → leave zip_code as None.
+      1. Skip events that already have zip_code AND latitude AND longitude.
+      2. If address is present → geocode full address → exact postcode + coords.
+      3. If city + state present (no address) → geocode "City, ST, USA".
+      4. If neither → leave fields as None.
+
+    Within each geocode attempt a three-query fallback chain is used:
+      a. Full address / city query (primary)
+      b. "{street}, {city}, {state}, USA" — strips leading venue-name noise
+      c. "{city}, {state}, USA" — city-level last resort
 
     Nominatim is rate-limited to 1 req/sec per OSM usage policy. A 1.1s sleep
-    is inserted between calls. Only events missing a zip consume API calls.
+    is inserted between calls.
     """
     import time
     from geopy.geocoders import Nominatim
     from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
-    needs_address_geocode = [e for e in events if not e.get("zip_code") and e.get("address")]
+    def _needs_geocode(e: Dict) -> bool:
+        return not (e.get("zip_code") and e.get("latitude") and e.get("longitude"))
+
+    needs_address_geocode = [e for e in events if _needs_geocode(e) and e.get("address")]
     needs_city_geocode = [
         e for e in events
-        if not e.get("zip_code") and not e.get("address")
+        if _needs_geocode(e) and not e.get("address")
         and e.get("city") and e.get("state")
     ]
     already_have = len(events) - len(needs_address_geocode) - len(needs_city_geocode)
 
     print(
-        f"[ZIP] {already_have} already have zip | "
+        f"[GEO] {already_have} already complete | "
         f"{len(needs_address_geocode)} need address geocode | "
         f"{len(needs_city_geocode)} need city geocode",
         flush=True,
@@ -267,16 +277,27 @@ def enrich_zip_codes(events: List[Dict]) -> List[Dict]:
                     language="en",
                     timeout=10,
                 )
-                if location and location.raw.get("address", {}).get("postcode"):
-                    raw_zip = location.raw["address"]["postcode"]
-                    event["zip_code"] = raw_zip[:5]
+                if location:
+                    postcode = location.raw.get("address", {}).get("postcode")
+                    if postcode and not event.get("zip_code"):
+                        event["zip_code"] = postcode[:5]
+                    if not event.get("latitude"):
+                        event["latitude"] = location.latitude
+                    if not event.get("longitude"):
+                        event["longitude"] = location.longitude
                     label = ["full", "street", "city"][min(attempt, 2)]
-                    print(f"  [ZIP:{label}] {query[:60]:<60} → {event['zip_code']}", flush=True)
+                    print(
+                        f"  [GEO:{label}] {query[:55]:<55} "
+                        f"zip={event.get('zip_code', '—')} "
+                        f"lat={round(location.latitude, 4)} "
+                        f"lon={round(location.longitude, 4)}",
+                        flush=True,
+                    )
                     return
             except (GeocoderTimedOut, GeocoderServiceError) as exc:
                 print(f"  [ZIP] Error on attempt {attempt + 1} for {query[:60]}: {exc}", flush=True)
 
-        print(f"  [ZIP] No postcode found for: {primary_query[:65]}", flush=True)
+        print(f"  [GEO] No result for: {primary_query[:65]}", flush=True)
 
     for i, (event, query) in enumerate(geocode_jobs):
         _geocode_with_fallback(event, query)
