@@ -1,15 +1,18 @@
 """
 SQLAlchemy models for transactions.
 
-Tables: transactions, transaction_items
-type: 'sale' | 'purchase' | 'trade'
-direction: 'in' (item acquired) | 'out' (item sold/traded away)
+Tables:
+  transactions      — a buy, sell, or trade event recorded by a user
+  transaction_cards — individual cards gained or lost in a transaction
+
+transaction_type: 'buy' | 'sell' | 'trade'
+direction:        'gained' | 'lost'  (from the recording user's perspective)
 """
 
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime
+from typing import List, Optional
 
-from sqlalchemy import ForeignKey, Numeric, String, Text
+from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -22,31 +25,40 @@ class Transaction(Base):
     __table_args__ = {"schema": "public"}
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
-    vendor_profile_id: Mapped[str] = mapped_column(
+    profile_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("public.vendor_profiles.id", ondelete="RESTRICT"),
+        ForeignKey("public.profiles.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    collector_profile_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("public.profiles.id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    transaction_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    transaction_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    marketplace: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     show_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("public.card_shows.id", ondelete="SET NULL"),
         nullable=True,
     )
-    type: Mapped[str] = mapped_column(String(20), nullable=False)
-    total_cash: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    counterparty_profile_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("public.profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    counterparty_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    cash_gained: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    cash_lost: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    transaction_value: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, default=datetime.utcnow)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
-    items: Mapped[list] = relationship("TransactionItem", back_populates="transaction", lazy="select")
+    cards: Mapped[List["TransactionCard"]] = relationship(
+        "TransactionCard", back_populates="transaction", lazy="select"
+    )
 
 
-class TransactionItem(Base):
-    __tablename__ = "transaction_items"
+class TransactionCard(Base):
+    __tablename__ = "transaction_cards"
     __table_args__ = {"schema": "public"}
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
@@ -55,14 +67,24 @@ class TransactionItem(Base):
         ForeignKey("public.transactions.id", ondelete="CASCADE"),
         nullable=False,
     )
-    inventory_id: Mapped[Optional[str]] = mapped_column(
+    direction: Mapped[str] = mapped_column(String(6), nullable=False)  # 'gained' | 'lost'
+    card_v2_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("public.cards_v2.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    inventory_item_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("public.vendor_inventory.id", ondelete="SET NULL"),
         nullable=True,
     )
-    card_id: Mapped[str] = mapped_column(String(50), nullable=False)  # FK enforced at DB level
-    condition: Mapped[str] = mapped_column(String(20), nullable=False)
-    price: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
-    direction: Mapped[str] = mapped_column(String(10), nullable=False)
+    condition_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    condition_ungraded: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    grading_company: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    grade: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    grading_company_other: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    estimated_value: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, default=datetime.utcnow)
 
-    transaction: Mapped["Transaction"] = relationship("Transaction", back_populates="items")
+    transaction: Mapped["Transaction"] = relationship("Transaction", back_populates="cards")

@@ -2,6 +2,7 @@
 SQLAlchemy models for vendor inventory.
 
 Tables: vendor_profiles, vendor_inventory
+vendor_inventory.status: 'active' (owned) | 'sold' (sold via transaction) | 'traded' (traded away)
 """
 
 from datetime import datetime
@@ -57,6 +58,7 @@ class VendorInventory(Base):
     is_for_trade: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     photo_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
