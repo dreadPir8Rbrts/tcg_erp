@@ -220,7 +220,6 @@ async def identify_card(
     if action not in VALID_ACTIONS:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid action '{action}'")
 
-    _require_vendor(profile)  # ensure vendor profile exists
     image_bytes = await image.read()
 
     # Cache check — instant return for repeat scans of the same card
@@ -373,7 +372,6 @@ def create_scan_job(
     if body.action not in VALID_ACTIONS:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid action '{body.action}'")
 
-    _require_vendor(profile)  # ensure vendor profile exists
     job_id = str(uuid.uuid4())
     s3_key = f"scans/{profile.id}/{job_id}.jpg"
 
@@ -409,7 +407,6 @@ def trigger_scan_job(
     Called by the client after the image has been uploaded to S3.
     Dispatches the Celery scan task.
     """
-    _require_vendor(profile)  # ensure vendor profile exists
     job = db.get(ScanJob, scan_job_id)
 
     if job is None or job.profile_id != profile.id:
@@ -428,7 +425,6 @@ def get_scan_job(
     db: Session = Depends(get_db),
 ) -> ScanJob:
     """Poll scan job status and result."""
-    _require_vendor(profile)  # ensure vendor profile exists
     job = db.get(ScanJob, scan_job_id)
 
     if job is None or job.profile_id != profile.id:
