@@ -2,9 +2,9 @@
 SQLAlchemy models for card show management.
 
 Tables:
-  card_shows               — scraped OnTreasure event listings (migration 0019)
-  vendor_show_registrations — vendor attendance/table registrations (Phase 1+)
-  show_inventory_tags      — inventory items tagged to a show (Phase 1+)
+  card_shows                   — scraped OnTreasure event listings (migration 0019)
+  profile_show_registrations   — attendance registrations for any profile (migration 0020)
+  show_inventory_tags          — inventory items tagged to a show (Phase 1+)
 """
 
 import uuid
@@ -65,17 +65,17 @@ class CardShow(Base):
                                                  server_default="now()")
 
 
-class VendorShowRegistration(Base):
-    __tablename__ = "vendor_show_registrations"
+class ProfileShowRegistration(Base):
+    __tablename__ = "profile_show_registrations"
     __table_args__ = (
-        UniqueConstraint("vendor_profile_id", "show_id", name="uq_vendor_show_registrations"),
+        UniqueConstraint("profile_id", "show_id", name="uq_profile_show_registrations"),
         {"schema": "public"},
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
-    vendor_profile_id: Mapped[str] = mapped_column(
+    profile_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("public.vendor_profiles.id", ondelete="CASCADE"),
+        ForeignKey("public.profiles.id", ondelete="CASCADE"),
         nullable=False,
     )
     show_id: Mapped[str] = mapped_column(
@@ -83,8 +83,6 @@ class VendorShowRegistration(Base):
         ForeignKey("public.card_shows.id", ondelete="CASCADE"),
         nullable=False,
     )
-    table_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, default=datetime.utcnow)
 
     show: Mapped["CardShow"] = relationship("CardShow")
