@@ -2,13 +2,19 @@
 Shows endpoints — public + authenticated.
 
 Routes (public):
-  GET  /shows              — list upcoming active shows with optional state/date filters
-  GET  /shows/{show_id}    — single show by UUID or ontreasure_id slug
+  GET  /shows                      — list upcoming active shows with optional filters
+  GET  /shows/{show_id}            — single show by UUID or ontreasure_id slug
+  GET  /shows/{show_id}/attendees  — all profiles registered for a show, grouped by role
+
+Routes (authenticated — any profile):
+  POST   /shows/{show_id}/register   — register the current user for a show
+  DELETE /shows/{show_id}/register   — unregister the current user from a show
 
 Routes (authenticated vendor):
-  POST   /shows/{show_id}/register    — register the vendor for a show
-  DELETE /shows/{show_id}/register    — unregister the vendor from a show
-  GET    /vendor/shows/registered     — list shows the vendor is registered for
+  GET  /vendor/shows/registered    — shows the current vendor is attending
+
+Routes (authenticated collector):
+  GET  /collector/shows/registered — shows the current collector is attending
 """
 
 import uuid
@@ -24,7 +30,7 @@ from app.db.session import get_db
 from app.dependencies import get_current_profile
 from app.models.inventory import VendorProfile
 from app.models.profiles import Profile
-from app.models.shows import CardShow, VendorShowRegistration
+from app.models.shows import CardShow, ProfileShowRegistration
 
 # ---------------------------------------------------------------------------
 # Zip code → lat/lon resolution (module-level cache, lives for process lifetime)
@@ -45,7 +51,6 @@ def _resolve_zip(zip_code: str) -> Optional[Tuple[float, float]]:
 
     try:
         from geopy.geocoders import Nominatim
-        from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
         geolocator = Nominatim(user_agent="cardops-api/1.0")
         location = geolocator.geocode(
@@ -67,11 +72,12 @@ def _resolve_zip(zip_code: str) -> Optional[Tuple[float, float]]:
 router = APIRouter(tags=["shows"])
 
 
-class ShowVendorResponse(BaseModel):
-    vendor_profile_id: str
+class ShowAttendeeResponse(BaseModel):
+    profile_id: str
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
     bio: Optional[str] = None
+    role: str
 
     model_config = {"from_attributes": True}
 
@@ -122,13 +128,6 @@ def _build_response(show: CardShow) -> dict:
     }
 
 
-def _get_vendor_or_404(profile: Profile, db: Session) -> VendorProfile:
-    vendor = db.query(VendorProfile).filter(VendorProfile.profile_id == profile.id).first()
-    if vendor is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor profile not found")
-    return vendor
-
-
 # ---------------------------------------------------------------------------
 # Public routes
 # ---------------------------------------------------------------------------
@@ -169,8 +168,7 @@ def list_shows(
             )
         center_lat, center_lon = coords
 
-    # Apply haversine distance filter when coordinates are available
-    # Formula: 3959 * acos(cos(lat1)*cos(lat2)*cos(lon2-lon1) + sin(lat1)*sin(lat2)) <= radius
+    # Apply haversine distance filter when coordinates are available.
     # Only includes shows that have lat/lon populated.
     if center_lat is not None and center_lon is not None:
         haversine = text(
@@ -212,34 +210,38 @@ def get_show(show_id: str, db: Session = Depends(get_db)):
     return _build_response(show)
 
 
-@router.get("/shows/{show_id}/vendors", response_model=List[ShowVendorResponse])
-def list_show_vendors(show_id: str, db: Session = Depends(get_db)):
-    """List vendors registered as attending a show."""
+@router.get("/shows/{show_id}/attendees", response_model=List[ShowAttendeeResponse])
+def list_show_attendees(show_id: str, db: Session = Depends(get_db)):
+    """
+    List all profiles registered as attending a show, with their role.
+    Vendors and collectors are differentiated by the role field.
+    """
     show = db.query(CardShow).filter(CardShow.id == show_id).first()
     if show is None:
         raise HTTPException(status_code=404, detail="Show not found")
 
     rows = (
-        db.query(VendorProfile, Profile)
-        .join(VendorShowRegistration, VendorShowRegistration.vendor_profile_id == VendorProfile.id)
-        .join(Profile, Profile.id == VendorProfile.profile_id)
-        .filter(VendorShowRegistration.show_id == show_id)
+        db.query(Profile, VendorProfile)
+        .join(ProfileShowRegistration, ProfileShowRegistration.profile_id == Profile.id)
+        .outerjoin(VendorProfile, VendorProfile.profile_id == Profile.id)
+        .filter(ProfileShowRegistration.show_id == show_id)
         .order_by(Profile.display_name.asc())
         .all()
     )
     return [
         {
-            "vendor_profile_id": vendor.id,
+            "profile_id": profile.id,
             "display_name": profile.display_name,
             "avatar_url": profile.avatar_url,
-            "bio": vendor.bio,
+            "bio": vendor.bio if vendor else None,
+            "role": profile.role,
         }
-        for vendor, profile in rows
+        for profile, vendor in rows
     ]
 
 
 # ---------------------------------------------------------------------------
-# Authenticated vendor routes
+# Authenticated routes — any profile (vendor or collector)
 # ---------------------------------------------------------------------------
 
 @router.post("/shows/{show_id}/register", status_code=status.HTTP_201_CREATED)
@@ -248,32 +250,30 @@ def register_for_show(
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ):
-    """Register the authenticated vendor as attending a show."""
-    vendor = _get_vendor_or_404(profile, db)
-
+    """Register the authenticated user as attending a show."""
     show = db.query(CardShow).filter(CardShow.id == show_id).first()
     if show is None:
         raise HTTPException(status_code=404, detail="Show not found")
 
     existing = (
-        db.query(VendorShowRegistration)
+        db.query(ProfileShowRegistration)
         .filter(
-            VendorShowRegistration.vendor_profile_id == str(vendor.id),
-            VendorShowRegistration.show_id == show_id,
+            ProfileShowRegistration.profile_id == profile.id,
+            ProfileShowRegistration.show_id == show_id,
         )
         .first()
     )
     if existing:
-        return {"id": str(existing.id), "show_id": show_id, "vendor_profile_id": str(vendor.id)}
+        return {"id": str(existing.id), "show_id": show_id, "profile_id": profile.id}
 
-    reg = VendorShowRegistration(
+    reg = ProfileShowRegistration(
         id=str(uuid.uuid4()),
-        vendor_profile_id=str(vendor.id),
+        profile_id=profile.id,
         show_id=show_id,
     )
     db.add(reg)
     db.commit()
-    return {"id": str(reg.id), "show_id": show_id, "vendor_profile_id": str(vendor.id)}
+    return {"id": str(reg.id), "show_id": show_id, "profile_id": profile.id}
 
 
 @router.delete("/shows/{show_id}/register", status_code=status.HTTP_204_NO_CONTENT)
@@ -282,14 +282,12 @@ def unregister_from_show(
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ):
-    """Unregister the authenticated vendor from a show."""
-    vendor = _get_vendor_or_404(profile, db)
-
+    """Unregister the authenticated user from a show."""
     reg = (
-        db.query(VendorShowRegistration)
+        db.query(ProfileShowRegistration)
         .filter(
-            VendorShowRegistration.vendor_profile_id == str(vendor.id),
-            VendorShowRegistration.show_id == show_id,
+            ProfileShowRegistration.profile_id == profile.id,
+            ProfileShowRegistration.show_id == show_id,
         )
         .first()
     )
@@ -300,19 +298,54 @@ def unregister_from_show(
     db.commit()
 
 
+# ---------------------------------------------------------------------------
+# Authenticated vendor routes
+# ---------------------------------------------------------------------------
+
 @router.get("/vendor/shows/registered", response_model=List[ShowResponse])
-def list_registered_shows(
+def list_vendor_registered_shows(
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ):
-    """List upcoming shows the authenticated vendor is registered for."""
-    vendor = _get_vendor_or_404(profile, db)
-
+    """List upcoming shows the authenticated vendor (or both-role user) is registered for."""
+    if profile.role not in ("vendor", "both"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vendor profile required",
+        )
     shows = (
         db.query(CardShow)
-        .join(VendorShowRegistration, VendorShowRegistration.show_id == CardShow.id)
+        .join(ProfileShowRegistration, ProfileShowRegistration.show_id == CardShow.id)
         .filter(
-            VendorShowRegistration.vendor_profile_id == str(vendor.id),
+            ProfileShowRegistration.profile_id == profile.id,
+            CardShow.date_start >= date.today(),
+        )
+        .order_by(CardShow.date_start.asc())
+        .all()
+    )
+    return [_build_response(s) for s in shows]
+
+
+# ---------------------------------------------------------------------------
+# Authenticated collector routes
+# ---------------------------------------------------------------------------
+
+@router.get("/collector/shows/registered", response_model=List[ShowResponse])
+def list_collector_registered_shows(
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+):
+    """List upcoming shows the authenticated collector (or both-role user) is registered for."""
+    if profile.role not in ("collector", "both"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Collector profile required",
+        )
+    shows = (
+        db.query(CardShow)
+        .join(ProfileShowRegistration, ProfileShowRegistration.show_id == CardShow.id)
+        .filter(
+            ProfileShowRegistration.profile_id == profile.id,
             CardShow.date_start >= date.today(),
         )
         .order_by(CardShow.date_start.asc())
