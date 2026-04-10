@@ -83,6 +83,7 @@ class ProfileShowRegistration(Base):
         ForeignKey("public.card_shows.id", ondelete="CASCADE"),
         nullable=False,
     )
+    attending_as: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, default=datetime.utcnow)
 
     show: Mapped["CardShow"] = relationship("CardShow")
@@ -98,7 +99,7 @@ class ShowInventoryTag(Base):
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
     inventory_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("public.vendor_inventory.id", ondelete="CASCADE"),
+        ForeignKey("public.inventory.id", ondelete="CASCADE"),
         nullable=False,
     )
     show_id: Mapped[str] = mapped_column(
