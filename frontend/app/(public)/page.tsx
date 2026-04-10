@@ -17,7 +17,7 @@ export default function HomePage() {
           <Link href="/signup">Get Started</Link>
         </Button>
         <Button variant="outline" asChild>
-          <Link href="/shows">Browse Shows</Link>
+          <Link href="/card-shows">Browse Shows</Link>
         </Button>
       </div>
     </div>

@@ -275,7 +275,12 @@ def register_for_show(
         .first()
     )
     if existing:
-        return {"id": str(existing.id), "show_id": show_id, "profile_id": profile.id}
+        # Update attending_as if it changed (e.g. user switches vendor ↔ collector)
+        if existing.attending_as != attending_as:
+            existing.attending_as = attending_as
+            db.add(existing)
+            db.commit()
+        return {"id": str(existing.id), "show_id": show_id, "profile_id": profile.id, "attending_as": attending_as}
 
     reg = ProfileShowRegistration(
         id=str(uuid.uuid4()),
@@ -285,7 +290,7 @@ def register_for_show(
     )
     db.add(reg)
     db.commit()
-    return {"id": str(reg.id), "show_id": show_id, "profile_id": profile.id}
+    return {"id": str(reg.id), "show_id": show_id, "profile_id": profile.id, "attending_as": attending_as}
 
 
 @router.delete("/shows/{show_id}/register", status_code=status.HTTP_204_NO_CONTENT)
@@ -313,6 +318,26 @@ def unregister_from_show(
 # ---------------------------------------------------------------------------
 # Authenticated routes — any profile
 # ---------------------------------------------------------------------------
+
+@router.get("/profile/shows/registrations")
+def list_my_show_registrations(
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> List[dict]:
+    """
+    Return the current user's show registrations as {show_id, attending_as}.
+    Used by the frontend to know which role the user registered as for each show.
+    """
+    regs = (
+        db.query(ProfileShowRegistration)
+        .filter(ProfileShowRegistration.profile_id == profile.id)
+        .all()
+    )
+    return [
+        {"show_id": str(r.show_id), "attending_as": r.attending_as or profile.role}
+        for r in regs
+    ]
+
 
 @router.get("/profile/shows/registered", response_model=List[ShowResponse])
 def list_my_registered_shows(

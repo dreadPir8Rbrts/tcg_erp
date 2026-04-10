@@ -2,14 +2,15 @@
 
 /**
  * Card shows page — lists upcoming shows with location + state filters.
- * Shared by vendors and collectors. Registration toggle works for any role.
+ * Shared by vendors and collectors.
+ * Registration uses two buttons: 'As Vendor' / 'As Collector'.
  */
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
   getShows,
-  getMyRegisteredShows,
+  getMyShowRegistrations,
   registerForShow,
   unregisterFromShow,
   type CardShow,
@@ -29,16 +30,18 @@ function formatDate(dateStr: string): string {
 
 function ShowCard({
   show,
-  isRegistered,
-  onToggle,
+  attendingAs,
+  onRegister,
+  onUnregister,
 }: {
   show: CardShow;
-  isRegistered: boolean;
-  onToggle: (showId: string, currentlyRegistered: boolean) => void;
+  attendingAs: "vendor" | "collector" | null;
+  onRegister: (showId: string, role: "vendor" | "collector") => void;
+  onUnregister: (showId: string) => void;
 }) {
   return (
     <div className="bg-card border rounded-lg overflow-hidden flex flex-col hover:shadow-md transition-shadow">
-      <Link href={`/shows/${show.id}`} className="block">
+      <Link href={`/card-shows/${show.id}`} className="block">
         <div className="relative w-full aspect-[4/3] bg-muted flex items-center justify-center overflow-hidden">
           {show.poster_url ? (
             <img src={show.poster_url} alt={show.name} className="w-full h-full object-cover" />
@@ -77,16 +80,30 @@ function ShowCard({
         </div>
       </Link>
 
-      <div className="px-3 pb-3 mt-auto">
+      <div className="px-3 pb-3 mt-auto flex gap-1.5">
         <button
-          onClick={() => onToggle(show.id, isRegistered)}
-          className={`w-full text-xs font-medium py-1.5 rounded-md border transition-colors
-            ${isRegistered
+          onClick={() =>
+            attendingAs === "vendor" ? onUnregister(show.id) : onRegister(show.id, "vendor")
+          }
+          className={`flex-1 text-xs font-medium py-1.5 rounded-md border transition-colors
+            ${attendingAs === "vendor"
               ? "bg-foreground text-background border-foreground hover:bg-foreground/80"
               : "bg-background text-foreground border-border hover:bg-muted"
             }`}
         >
-          {isRegistered ? "✓ Going" : "I'm Going"}
+          {attendingAs === "vendor" ? "✓ Vendor" : "As Vendor"}
+        </button>
+        <button
+          onClick={() =>
+            attendingAs === "collector" ? onUnregister(show.id) : onRegister(show.id, "collector")
+          }
+          className={`flex-1 text-xs font-medium py-1.5 rounded-md border transition-colors
+            ${attendingAs === "collector"
+              ? "bg-foreground text-background border-foreground hover:bg-foreground/80"
+              : "bg-background text-foreground border-border hover:bg-muted"
+            }`}
+        >
+          {attendingAs === "collector" ? "✓ Collector" : "As Collector"}
         </button>
       </div>
     </div>
@@ -109,9 +126,9 @@ const DEFAULT_FILTERS: Filters = {
   coords: null,
 };
 
-export default function ShowsPage() {
+export default function CardShowsPage() {
   const [shows, setShows] = useState<CardShow[]>([]);
-  const [registeredIds, setRegisteredIds] = useState<Set<string>>(new Set());
+  const [registrationMap, setRegistrationMap] = useState<Map<string, "vendor" | "collector">>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,10 +152,14 @@ export default function ShowsPage() {
       params.radius_miles = filters.radiusMiles;
     }
 
-    Promise.all([getShows(params), getMyRegisteredShows()])
-      .then(([allShows, registered]) => {
+    Promise.all([getShows(params), getMyShowRegistrations()])
+      .then(([allShows, registrations]) => {
         setShows(allShows);
-        setRegisteredIds(new Set(registered.map((s) => s.id)));
+        const map = new Map<string, "vendor" | "collector">();
+        for (const r of registrations) {
+          map.set(r.show_id, r.attending_as);
+        }
+        setRegistrationMap(map);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
@@ -180,30 +201,37 @@ export default function ShowsPage() {
     fetchShows(DEFAULT_FILTERS);
   }
 
-  const locationActive = !!(applied.coords || applied.zipCode.match(/^\d{5}$/));
-  const stateActive = !!applied.state;
-  const anyFilterActive = locationActive || stateActive;
-
-  const handleToggle = useCallback(async (showId: string, currentlyRegistered: boolean) => {
-    setRegisteredIds((prev) => {
-      const next = new Set(prev);
-      currentlyRegistered ? next.delete(showId) : next.add(showId);
-      return next;
-    });
+  const handleRegister = useCallback(async (showId: string, role: "vendor" | "collector") => {
+    const prev = registrationMap.get(showId) ?? null;
+    setRegistrationMap((m) => new Map(m).set(showId, role));
     try {
-      if (currentlyRegistered) {
-        await unregisterFromShow(showId);
-      } else {
-        await registerForShow(showId);
-      }
+      await registerForShow(showId, role);
     } catch {
-      setRegisteredIds((prev) => {
-        const next = new Set(prev);
-        currentlyRegistered ? next.add(showId) : next.delete(showId);
+      setRegistrationMap((m) => {
+        const next = new Map(m);
+        prev === null ? next.delete(showId) : next.set(showId, prev);
         return next;
       });
     }
-  }, []);
+  }, [registrationMap]);
+
+  const handleUnregister = useCallback(async (showId: string) => {
+    const prev = registrationMap.get(showId) ?? null;
+    setRegistrationMap((m) => { const next = new Map(m); next.delete(showId); return next; });
+    try {
+      await unregisterFromShow(showId);
+    } catch {
+      setRegistrationMap((m) => {
+        const next = new Map(m);
+        if (prev !== null) next.set(showId, prev);
+        return next;
+      });
+    }
+  }, [registrationMap]);
+
+  const locationActive = !!(applied.coords || applied.zipCode.match(/^\d{5}$/));
+  const stateActive = !!applied.state;
+  const anyFilterActive = locationActive || stateActive;
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -213,7 +241,6 @@ export default function ShowsPage() {
       {/* Filter bar */}
       <div className="border rounded-lg p-4 mb-6 flex flex-col gap-3">
         <div className="flex flex-wrap gap-3 items-end">
-          {/* Zip code */}
           <div className="flex flex-col gap-1">
             <label className="text-xs text-muted-foreground">Zip code</label>
             <input
@@ -227,7 +254,6 @@ export default function ShowsPage() {
             />
           </div>
 
-          {/* Radius */}
           <div className="flex flex-col gap-1">
             <label className="text-xs text-muted-foreground">Radius</label>
             <select
@@ -241,7 +267,6 @@ export default function ShowsPage() {
             </select>
           </div>
 
-          {/* State */}
           <div className="flex flex-col gap-1">
             <label className="text-xs text-muted-foreground">State</label>
             <input
@@ -254,7 +279,6 @@ export default function ShowsPage() {
             />
           </div>
 
-          {/* Use my location */}
           <button
             onClick={handleUseMyLocation}
             disabled={locating}
@@ -270,7 +294,6 @@ export default function ShowsPage() {
             {locating ? "Locating..." : "Use my location"}
           </button>
 
-          {/* Apply / Clear */}
           <button
             onClick={handleApply}
             className="px-4 py-2 text-sm font-medium rounded-md bg-foreground text-background hover:bg-foreground/80 transition-colors"
@@ -316,8 +339,9 @@ export default function ShowsPage() {
               <ShowCard
                 key={show.id}
                 show={show}
-                isRegistered={registeredIds.has(show.id)}
-                onToggle={handleToggle}
+                attendingAs={registrationMap.get(show.id) ?? null}
+                onRegister={handleRegister}
+                onUnregister={handleUnregister}
               />
             ))}
           </div>

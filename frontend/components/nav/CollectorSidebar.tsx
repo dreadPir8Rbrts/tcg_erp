@@ -52,7 +52,7 @@ export function CollectorSidebar({ profileId }: CollectorSidebarProps) {
     { href: p ? `/dashboard/${p}` : "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: p ? `/inventory/${p}` : "/inventory", label: "Collection", icon: Package },
     { href: p ? `/wishlist/${p}` : "/wishlist", label: "Wishlist", icon: Bookmark },
-    { href: "/shows", label: "Shows", icon: CalendarDays },
+    { href: "/card-shows", label: "Card Shows", icon: CalendarDays },
     { href: p ? `/transactions/${p}` : "/transactions", label: "Transactions", icon: ArrowLeftRight },
     { href: p ? `/profile/${p}` : "/profile", label: "Profile", icon: UserCircle },
   ];

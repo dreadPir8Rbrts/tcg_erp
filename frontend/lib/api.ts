@@ -348,10 +348,19 @@ export async function getCollectorRegisteredShows(): Promise<CardShow[]> {
   return res.json();
 }
 
-export async function registerForShow(showId: string): Promise<void> {
+export async function getMyShowRegistrations(): Promise<{ show_id: string; attending_as: "vendor" | "collector" }[]> {
+  const res = await fetch(`${API_URL}/api/v1/profile/shows/registrations`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to load registrations: ${res.status}`);
+  return res.json();
+}
+
+export async function registerForShow(showId: string, attendingAs: "vendor" | "collector"): Promise<void> {
   const res = await fetch(`${API_URL}/api/v1/shows/${showId}/register`, {
     method: "POST",
     headers: await authHeaders(),
+    body: JSON.stringify({ attending_as: attendingAs }),
   });
   if (!res.ok) throw new Error(`Failed to register: ${res.status}`);
 }

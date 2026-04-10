@@ -20,7 +20,7 @@ export default function PublicLayout({
         <div className="flex-1" />
         <nav className="flex items-center gap-3">
           <Link
-            href="/shows"
+            href="/card-shows"
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             Browse Shows

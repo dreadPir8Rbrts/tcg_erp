@@ -53,7 +53,7 @@ export function VendorSidebar({ profileId }: VendorSidebarProps) {
     { href: p ? `/dashboard/${p}` : "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: p ? `/inventory/${p}` : "/inventory", label: "Inventory", icon: Package },
     { href: p ? `/scan/${p}` : "/scan", label: "Scan", icon: ScanLine },
-    { href: "/shows", label: "Shows", icon: CalendarDays },
+    { href: "/card-shows", label: "Card Shows", icon: CalendarDays },
     { href: p ? `/transactions/${p}` : "/transactions", label: "Transactions", icon: ArrowLeftRight },
     { href: p ? `/profile/${p}` : "/profile", label: "Profile", icon: UserCircle },
     { href: "/api-tester", label: "API Tester", icon: FlaskConical },

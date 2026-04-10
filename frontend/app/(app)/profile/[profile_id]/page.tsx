@@ -498,7 +498,7 @@ export default function ProfilePage() {
                     return (
                       <a
                         key={show.id}
-                        href={`/shows/${show.id}`}
+                        href={`/card-shows/${show.id}`}
                         className="flex items-center gap-3 border rounded-lg px-3 py-2 hover:bg-muted transition-colors"
                       >
                         {show.poster_url ? (
