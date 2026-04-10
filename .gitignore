@@ -32,3 +32,9 @@ node_modules/
 frontend/.env
 frontend/.env.local
 backend/dump.rdb
+
+# Markdown docs — tracked exceptions below
+*.md
+!CLAUDE.md
+!**/CLAUDE.md
+!README.md

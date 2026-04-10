@@ -60,6 +60,22 @@
 
 ## Session corrections
 
+### 2026-04-10 — Supabase direct connection fails from DO droplet (IPv6 issue)
+**Rule:** The Supabase direct connection URL (port 5432, `db.xxx.supabase.co`) resolves to an IPv6 address which DigitalOcean droplets cannot reach without the paid IPv4 add-on. Always use the **transaction pooler URL** (port 6543) for application connections from DO droplets. The pooler resolves to IPv4 and works without any add-on. Only the direct URL is needed for Alembic — run migrations from a machine that can reach IPv6, or enable the Supabase IPv4 add-on (~$4/mo).
+**Context:** `backend/.env` `DATABASE_URL`, scraper `DATABASE_URL`, any DO-hosted service
+
+### 2026-04-10 — Redis protected mode blocks cross-host connections even on private network
+**Rule:** Redis `protected-mode yes` (default) rejects all connections from non-loopback interfaces, even private VPC IPs, unless a password is set. When allowing cross-droplet Redis access on a private VPC, set `protected-mode no` in `/etc/redis/redis.conf` and bind Redis to the private IP. Restrict access at the firewall level (`ufw allow from <private-ip> to any port 6379`) rather than relying on Redis auth for intra-VPC traffic.
+**Context:** Scraper droplet Redis config, any Redis shared across DO droplets
+
+### 2026-04-10 — Use separate SCRAPER_REDIS_URL to decouple scraper task queue
+**Rule:** Never use the scraper droplet's Redis as the main app's Celery broker. Add a separate `scraper_redis_url` field to `Settings` used only to enqueue on-demand scraping tasks. This keeps the main app's own task queue (scans, catalog sync) independent of the scraper droplet — if the scraper goes down, only pricing data goes stale, nothing else breaks.
+**Context:** `backend/app/db/session.py`, `backend/app/api/pricing.py`
+
+### 2026-04-10 — pydantic-settings extra_forbidden fires on undeclared env vars
+**Rule:** If `.env` contains a key that has no matching field in `Settings`, pydantic-settings raises `Extra inputs are not permitted` at startup. Always declare new env vars as fields in `Settings` before adding them to `.env`. This fires even for optional vars — declare them with `Optional[str] = None`.
+**Context:** `backend/app/db/session.py` Settings class
+
 ### 2026-04-07 — next/image proxies external CDN images through localhost; use plain <img>
 **Rule:** Never use `next/image` (`<Image>`) for card images sourced from external CDNs (Scrydex, TCGdex). Next.js proxies remote images through its own image optimization server, which fails with 400 when the CDN rejects the request or localhost can't reach it. Use plain `<img>` tags for externally-hosted card images. Reserve `next/image` for S3-hosted assets (avatars, backgrounds) where the hostname is controlled.
 **Context:** Any component rendering card thumbnails from `cards_v2.images`

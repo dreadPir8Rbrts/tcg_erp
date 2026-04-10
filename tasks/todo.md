@@ -1,6 +1,6 @@
 # CardOps — Task Board
 
-## Active phase: V2 API catalog migration complete — Vendor Inventory live on cards_v2
+## Active phase: Pricing infrastructure live — frontend pricing UI next
 
 ---
 
@@ -75,58 +75,73 @@
 
 ### New catalog source: V2 API (api.scrydex.com)
 - [x] Migration 0016 — expansions_v2 + cards_v2 tables
-  - UUID PKs, UNIQUE(game, external_id) business key
-  - Supports pokemon (EN + JP) and onepiece (EN)
-  - GIN trigram index on cards_v2.name
-  - variants JSONB stores full API response including prices
-  - price_data_uploaded_at tracks freshness of embedded prices
 - [x] SQLAlchemy models — ExpansionV2, CardV2 (catalog_v2.py)
-- [x] Settings fields: v2_api_key, v2_api_team_id (env vars: V2_API_KEY, V2_API_TEAM_ID)
-- [x] catalog_sync_v2.py Celery tasks:
-  - v2_api.sync_expansions — sync all expansions for a game
-  - v2_api.sync_cards_for_expansion — paginated card sync
-  - v2_api.full_sync — weekly Sunday 4am UTC beat schedule
-  - v2_api.test_sync — smoke test (1 expansion per game)
-  - v2_api.refresh_prices — written but NOT scheduled (Phase 2 activation pending)
-- [x] Pagination fix: terminates on len(data) < PAGE_SIZE (not totalCount comparison)
-- [x] Translation field fix: extracts nested dict → en name string before upsert
+- [x] catalog_sync_v2.py Celery tasks
 - [x] Full sync completed: all historical Pokémon sets (EN + JP) + One Piece populated
-- [x] TCGdex catalog syncs frozen (catalog.sync_new_sets, catalog.delta_sync_cards removed from beat schedule)
+- [x] TCGdex catalog syncs frozen
 
 ### Pivot all active code to cards_v2 + expansions_v2
 - [x] Migration 0017 — add card_v2_id to vendor_inventory + price_snapshots
-  - vendor_inventory: card_v2_id UUID FK → cards_v2.id (legacy card_id kept as dead column)
-  - price_snapshots: card_v2_id replaces card_id in unique constraint + index
-- [x] api/catalog.py rewritten — GET /cards, GET /cards/{id}, GET /expansions, GET /expansions/{id}
-  - Search params: name, card_num, game, language_code, set_name
-  - image_url extracted server-side from images[0]['small'] (fast thumbnails)
-- [x] api/vendor.py — inventory add/list join cards_v2 + expansions_v2
-- [x] api/scans.py — Claude Vision lookup uses CardV2 + ExpansionV2; pokemon-only filter
-- [x] services/catalog_match.py — Quick Scan fuzzy matcher rewritten for CardV2/ExpansionV2
-- [x] tasks/scan_pipeline.py — _match_card joins ExpansionV2 on external_id
-- [x] schemas/vendor.py — added game, language_code; series_name/card_num now Optional
-- [x] frontend/lib/api.ts — Card interface updated (removed category/illustrator/series_logo_url/variants; added game, language_code; series_name optional)
-- [x] next.config.mjs — images.scrydex.com added to remotePatterns
-- [x] inventory page — replaced next/image with plain <img> for card thumbnails (avoids Next.js proxy 400 on CDN URLs)
-- [x] profile/scan pages — added sizes prop to all next/image fill usages
+- [x] api/catalog.py rewritten for cards_v2 + expansions_v2
+- [x] api/vendor.py, api/scans.py, services/catalog_match.py updated
 
 ---
 
-## Upcoming — Phase 3 (not started)
-- Card show listings (admin-seeded)
-- Vendor show registration + table location
-- Show inventory tagging
-- Show detail page with vendor list
+## App restructure ✅ (2026-04-09)
+- [x] Unified `/profile/[profile_id]` route (owner + public visitor)
+- [x] All user-scoped routes nested under `[profile_id]`: dashboard, inventory, scan, wishlist, transactions
+- [x] Login/onboarding redirect to `/dashboard/{profile_id}`
+- [x] Sidebar reads `profileId` from React Query cache
+- [x] Card shows: route renamed `/shows` → `/card-shows`, sidebar label updated
+- [x] Two-button show registration: "Attending as Vendor" / "Attending as Collector"
+- [x] Backend: `attending_as` field on `profile_show_registrations` (migration 0024)
+- [x] Backend: `GET /profile/shows/registrations` endpoint added
 
-## Upcoming — Phase 4 (not started)
-- Browse shows (no auth required)
-- Browse vendors at a show
-- Search card inventory across a show
-- Card price lookup (from price_snapshots / cards_v2.variants)
+---
+
+## Pricing infrastructure ✅ (2026-04-10)
+
+### Scraper droplet (card-ops-droplet repo)
+- [x] Standalone repo deployed to DO droplet (159.203.130.99, NYC3, 1GB)
+- [x] Redis + Celery worker + Celery beat running as systemd services
+- [x] `prices.scrape_tcgplayer_nm` — nightly 2am UTC, active inventory cards
+- [x] `prices.scrape_ebay_sold_comps` — nightly 3am UTC, active inventory cards
+- [x] `prices.scrape_card_on_demand` — user-triggered, single card, all grade targets
+- [x] eBay scraper: targeted grade queries + 20→7 filtering/scoring logic
+- [x] TCGPlayer scraper: JSON extraction + HTML fallback
+- [x] Migration 0025 — `sold_comps` table (run and applied)
+
+### Main app backend
+- [x] `SoldComp` SQLAlchemy model added to `models/catalog.py`
+- [x] `GET /api/v1/cards/{card_v2_id}/pricing` — NM anchor + condition estimates; returns 202 + enqueues on-demand scrape when stale
+- [x] `GET /api/v1/cards/{card_v2_id}/sold-comps` — filtered sold comps (condition_type, grading_company, grade, condition_ungraded)
+- [x] `SCRAPER_REDIS_URL` setting added — points to scraper droplet private IP
+
+### Infrastructure
+- [x] App droplet deployed (134.209.170.89, NYC3, 2GB) — FastAPI + Nginx
+- [x] Scraper droplet Redis bound to private IP (10.108.0.2) — accessible from app droplet only
+- [x] Private VPC networking between app droplet and scraper droplet
+- [x] Main app deployed at http://134.209.170.89
+
+---
+
+## Active — next up
+
+- [ ] Frontend pricing component:
+  - Ungraded pricing dropdown: NM (TCGPlayer) + LP/MP/HP/DMG estimates
+  - "View recent sales" per condition → sold comps inline
+  - Graded pricing dropdown: grader selector + grade selector + sold comps
+  - Polling state: "pricing loading..." while 202 pending → auto-refresh on ready
+- [ ] SSL/domain setup on app droplet (Certbot)
+- [ ] Update frontend API base URL from localhost:8000 → http://134.209.170.89
+
+---
 
 ## Backlog / deferred
-- [ ] v2_api.refresh_prices activation — see tasks/full_tcg_api_ingestion_plan.md for credit cost analysis
-- [ ] Quick Scan edition disambiguation (wrong-match failures — correct name, wrong set)
-- [ ] One Piece scan support (scan pipeline currently Pokémon-only)
+- [ ] v2_api.refresh_prices activation — see tasks/full_tcg_api_ingestion_plan.md
+- [ ] Quick Scan edition disambiguation (wrong-match failures)
+- [ ] One Piece scan support
 - [ ] Wishlist backend + frontend
-- [ ] Drop legacy card_id column from vendor_inventory (migration 0018, after stable)
+- [ ] Drop legacy card_id column from vendor_inventory (migration 0018)
+- [ ] Validate eBay scraper CSS selectors against live eBay HTML
+- [ ] Validate TCGPlayer scraper JSON extraction patterns
