@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import catalog
 from app.api import dev
+from app.api import pricing
 from app.api import profiles
 from app.api import vendor
 from app.api import scans
@@ -25,6 +26,7 @@ app.add_middleware(
 
 app.include_router(catalog.router, prefix="/api/v1")
 app.include_router(dev.router, prefix="/api/v1")
+app.include_router(pricing.router, prefix="/api/v1")
 app.include_router(profiles.router, prefix="/api/v1")
 app.include_router(vendor.router, prefix="/api/v1")
 app.include_router(scans.router, prefix="/api/v1")

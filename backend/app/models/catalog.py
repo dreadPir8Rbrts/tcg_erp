@@ -124,6 +124,32 @@ PRICE_VARIANT_CHECK = (
 )
 
 
+class SoldComp(Base):
+    """Individual sold listing record scraped from eBay by the droplet scraper."""
+
+    __tablename__ = "sold_comps"
+    __table_args__ = (
+        UniqueConstraint("listing_url", name="uq_sold_comps_listing_url"),
+        {"schema": "public"},
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    card_v2_id = Column(UUID(as_uuid=True), ForeignKey("public.cards_v2.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String(20), nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
+    listing_url = Column(String(1000), nullable=False)
+    price = Column(Numeric(10, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="USD")
+    sold_date = Column(DateTime, nullable=True)
+    condition_type = Column(String(10), nullable=True)
+    condition_ungraded = Column(String(5), nullable=True)
+    grading_company = Column(String(10), nullable=True)
+    grade = Column(String(30), nullable=True)
+    grading_company_other = Column(String(100), nullable=True)
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class PriceSnapshot(Base):
     __tablename__ = "price_snapshots"
 

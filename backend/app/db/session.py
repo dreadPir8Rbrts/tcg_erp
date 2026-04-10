@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # Falls back to database_url if not set (fine for local Postgres).
     migration_database_url: Optional[str] = None
     redis_url: str = "redis://localhost:6379/0"
+    # Separate Redis on the scraper droplet — used only to enqueue on-demand
+    # scrape tasks. Kept separate from redis_url so the main app's own Celery
+    # broker is never coupled to the droplet.
+    scraper_redis_url: Optional[str] = None
     supabase_url: Optional[str] = None
     supabase_service_key: Optional[str] = None  # for server-side admin operations (Phase 2+)
     aws_access_key_id: Optional[str] = None
