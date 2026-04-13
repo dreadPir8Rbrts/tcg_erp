@@ -19,8 +19,11 @@ import {
   quickIdentifyCard,
   addInventoryItem,
   getInventory,
+  getCardPricing,
+  getSoldComps,
   type Card,
   type InventoryItemWithCard,
+  type SoldCompsParams,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -184,6 +187,20 @@ export default function InventoryPage() {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
+  // Pricing debug
+  const [pricingResult, setPricingResult] = useState<unknown>(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
+  const [pricingError, setPricingError] = useState<string | null>(null);
+
+  // Sold comps debug
+  const [compsConditionType, setCompsConditionType] = useState<"ungraded" | "graded">("ungraded");
+  const [compsConditionUngraded, setCompsConditionUngraded] = useState("nm");
+  const [compsGradingCompany, setCompsGradingCompany] = useState("psa");
+  const [compsGrade, setCompsGrade] = useState("");
+  const [compsResult, setCompsResult] = useState<unknown>(null);
+  const [compsLoading, setCompsLoading] = useState(false);
+  const [compsError, setCompsError] = useState<string | null>(null);
+
   useEffect(() => {
     getInventory()
       .then(setInventory)
@@ -244,6 +261,15 @@ export default function InventoryPage() {
     setQuantity("1");
     setNotes("");
     setAddError(null);
+    // Reset pricing debug state for the new card
+    setPricingResult(null);
+    setPricingError(null);
+    setCompsResult(null);
+    setCompsError(null);
+    setCompsConditionType("ungraded");
+    setCompsConditionUngraded("nm");
+    setCompsGradingCompany("psa");
+    setCompsGrade("");
   }
 
   async function handleScan(file: File, mode: ScanMode) {
@@ -295,6 +321,43 @@ export default function InventoryPage() {
       setScanError(err instanceof Error ? err.message : "Scan failed. Please try again.");
     } finally {
       setScanning(false);
+    }
+  }
+
+  async function handleFetchPricing() {
+    if (!confirm) return;
+    setPricingLoading(true);
+    setPricingError(null);
+    setPricingResult(null);
+    try {
+      const result = await getCardPricing(confirm.card.id);
+      setPricingResult(result);
+    } catch (e) {
+      setPricingError(e instanceof Error ? e.message : "Failed to fetch pricing");
+    } finally {
+      setPricingLoading(false);
+    }
+  }
+
+  async function handleFetchComps() {
+    if (!confirm) return;
+    setCompsLoading(true);
+    setCompsError(null);
+    setCompsResult(null);
+    try {
+      const params: SoldCompsParams = { condition_type: compsConditionType };
+      if (compsConditionType === "ungraded") {
+        params.condition_ungraded = compsConditionUngraded;
+      } else {
+        params.grading_company = compsGradingCompany;
+        if (compsGrade) params.grade = compsGrade;
+      }
+      const result = await getSoldComps(confirm.card.id, params);
+      setCompsResult(result);
+    } catch (e) {
+      setCompsError(e instanceof Error ? e.message : "Failed to fetch sold comps");
+    } finally {
+      setCompsLoading(false);
     }
   }
 
@@ -643,6 +706,119 @@ export default function InventoryPage() {
                 className="w-full border rounded-md px-3 py-2 text-sm bg-background"
               />
             </div>
+
+            {/* ---- Pricing debug ---- */}
+            <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Raw Prices</p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleFetchPricing}
+                disabled={pricingLoading}
+              >
+                {pricingLoading ? "Fetching…" : "Fetch Data"}
+              </Button>
+              {pricingError && <p className="text-xs text-destructive">{pricingError}</p>}
+              {pricingResult !== null && (
+                <pre className="text-xs bg-background border rounded p-2 overflow-auto max-h-52 whitespace-pre-wrap break-all">
+                  {JSON.stringify(pricingResult, null, 2)}
+                </pre>
+              )}
+            </div>
+
+            <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Sold Comps</p>
+
+              {/* Ungraded / Graded toggle */}
+              <div className="flex gap-1">
+                {(["ungraded", "graded"] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      setCompsConditionType(t);
+                      setCompsResult(null);
+                      setCompsError(null);
+                    }}
+                    className={`px-2.5 py-1 text-xs rounded-md border transition-colors capitalize ${
+                      compsConditionType === t
+                        ? "bg-foreground text-background border-foreground"
+                        : "bg-background hover:bg-muted"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              {compsConditionType === "ungraded" && (
+                <div className="flex flex-wrap gap-1.5">
+                  {UNGRADED_CONDITIONS.map((c) => (
+                    <button
+                      key={c.value}
+                      onClick={() => { setCompsConditionUngraded(c.value); setCompsResult(null); }}
+                      className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                        compsConditionUngraded === c.value
+                          ? "bg-foreground text-background border-foreground"
+                          : "bg-background hover:bg-muted"
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {compsConditionType === "graded" && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {GRADING_COMPANIES.filter((co) => co.value !== "other").map((co) => (
+                      <button
+                        key={co.value}
+                        onClick={() => { setCompsGradingCompany(co.value); setCompsGrade(""); setCompsResult(null); }}
+                        className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                          compsGradingCompany === co.value
+                            ? "bg-foreground text-background border-foreground"
+                            : "bg-background hover:bg-muted"
+                        }`}
+                      >
+                        {co.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {gradeOptionsForCompany(compsGradingCompany).map((g) => (
+                      <button
+                        key={g.value}
+                        onClick={() => { setCompsGrade(g.value); setCompsResult(null); }}
+                        className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                          compsGrade === g.value
+                            ? "bg-foreground text-background border-foreground"
+                            : "bg-background hover:bg-muted"
+                        }`}
+                      >
+                        {g.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleFetchComps}
+                disabled={compsLoading || (compsConditionType === "graded" && !compsGrade)}
+              >
+                {compsLoading ? "Fetching…" : "Fetch Data"}
+              </Button>
+              {compsError && <p className="text-xs text-destructive">{compsError}</p>}
+              {compsResult !== null && (
+                <pre className="text-xs bg-background border rounded p-2 overflow-auto max-h-52 whitespace-pre-wrap break-all">
+                  {JSON.stringify(compsResult, null, 2)}
+                </pre>
+              )}
+            </div>
+            {/* ---- end pricing debug ---- */}
 
             {addError && <p className="text-xs text-destructive">{addError}</p>}
 

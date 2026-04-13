@@ -510,6 +510,95 @@ export async function deleteTransaction(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Pricing
+// ---------------------------------------------------------------------------
+
+export interface ConditionEstimate {
+  condition: string;
+  label: string;
+  multiplier: number;
+  estimated_price: number | null;
+}
+
+export interface PricingReady {
+  card_v2_id: string;
+  status: "ready";
+  nm_market_price: number;
+  currency: string;
+  source: string;
+  fetched_at: string;
+  expires_at: string;
+  condition_estimates: ConditionEstimate[];
+}
+
+export interface PricingPending {
+  card_v2_id: string;
+  status: "pending";
+  message: string;
+}
+
+export type CardPricingResponse = PricingReady | PricingPending;
+
+export interface SoldComp {
+  id: string;
+  source: string;
+  title: string;
+  description: string | null;
+  listing_url: string;
+  price: number;
+  currency: string;
+  sold_date: string | null;
+  condition_type: string | null;
+  condition_ungraded: string | null;
+  grading_company: string | null;
+  grade: string | null;
+  grading_company_other: string | null;
+  fetched_at: string;
+}
+
+export interface SoldCompsResponse {
+  card_v2_id: string;
+  total: number;
+  comps: SoldComp[];
+}
+
+export interface SoldCompsParams {
+  condition_type?: string;
+  grading_company?: string;
+  grade?: string;
+  condition_ungraded?: string;
+  limit?: number;
+}
+
+/** Returns the HTTP status alongside the parsed body so callers can distinguish 200 vs 202. */
+export async function getCardPricing(
+  cardV2Id: string
+): Promise<{ http_status: number; data: CardPricingResponse }> {
+  const res = await fetch(`${API_URL}/api/v1/cards/${cardV2Id}/pricing`, {
+    headers: await authHeaders(),
+  });
+  const data: CardPricingResponse = await res.json();
+  return { http_status: res.status, data };
+}
+
+export async function getSoldComps(
+  cardV2Id: string,
+  params: SoldCompsParams = {}
+): Promise<SoldCompsResponse> {
+  const qs = new URLSearchParams();
+  if (params.condition_type) qs.set("condition_type", params.condition_type);
+  if (params.grading_company) qs.set("grading_company", params.grading_company);
+  if (params.grade) qs.set("grade", params.grade);
+  if (params.condition_ungraded) qs.set("condition_ungraded", params.condition_ungraded);
+  if (params.limit) qs.set("limit", String(params.limit));
+  const res = await fetch(`${API_URL}/api/v1/cards/${cardV2Id}/sold-comps?${qs}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to load sold comps: ${res.status}`);
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Identify a card via Google Cloud Vision OCR — faster than Claude Vision.
 // Note: do NOT set Content-Type header — browser sets it with the multipart boundary.
 export async function quickIdentifyCard(file: File): Promise<QuickScanResult> {
