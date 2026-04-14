@@ -136,15 +136,26 @@ def get_card_pricing(
     Returns 202 with { "status": "pending" } when data is stale or missing —
     an on-demand scrape has been enqueued and the client should poll.
     """
-    snapshot = (
+    # Fetch all recent TCGPlayer snapshots for this card and pick the best anchor.
+    # Prefer holofoil (most common Pokémon primary variant) → normal → any variant.
+    snapshots = (
         db.query(PriceSnapshot)
         .filter(
             PriceSnapshot.card_v2_id == card_v2_id,
             PriceSnapshot.source == "tcgplayer",
+            PriceSnapshot.market_price.isnot(None),
         )
         .order_by(PriceSnapshot.fetched_at.desc())
-        .first()
+        .all()
     )
+
+    snapshot = None
+    for preferred in ("holofoil", "normal"):
+        snapshot = next((s for s in snapshots if s.variant == preferred), None)
+        if snapshot:
+            break
+    if snapshot is None and snapshots:
+        snapshot = snapshots[0]   # any variant, most recent
 
     if not _is_pricing_fresh(snapshot):
         _enqueue_on_demand(card_v2_id)
