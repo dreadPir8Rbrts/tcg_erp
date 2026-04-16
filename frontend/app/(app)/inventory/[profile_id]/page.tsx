@@ -27,6 +27,7 @@ import {
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Loader2 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -330,7 +331,12 @@ export default function InventoryPage() {
     setPricingError(null);
     setPricingResult(null);
     try {
-      const result = await getCardPricing(confirm.card.id);
+      let result = await getCardPricing(confirm.card.id);
+      // If the scraper task was just enqueued (202), poll until data is ready
+      while ((result as { http_status: number }).http_status === 202) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        result = await getCardPricing(confirm.card.id);
+      }
       setPricingResult(result);
     } catch (e) {
       setPricingError(e instanceof Error ? e.message : "Failed to fetch pricing");
@@ -716,14 +722,29 @@ export default function InventoryPage() {
                 onClick={handleFetchPricing}
                 disabled={pricingLoading}
               >
-                {pricingLoading ? "Fetching…" : "Fetch Data"}
+                Fetch Data
               </Button>
               {pricingError && <p className="text-xs text-destructive">{pricingError}</p>}
-              {pricingResult !== null && (
-                <pre className="text-xs bg-background border rounded p-2 overflow-auto max-h-52 whitespace-pre-wrap break-all">
-                  {JSON.stringify(pricingResult, null, 2)}
-                </pre>
+              {(pricingLoading || (pricingResult !== null && (pricingResult as { http_status: number }).http_status === 202)) && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>Fetching live price, this may take a moment…</span>
+                </div>
               )}
+              {pricingResult !== null && (pricingResult as { http_status: number }).http_status === 200 && (() => {
+                const data = (pricingResult as { http_status: number; data: { nm_market_price: number; condition_estimates: { condition: string; label: string; estimated_price: number }[] } }).data;
+                const estimates = data.condition_estimates.filter((e) => e.condition !== "nm");
+                return (
+                  <div className="space-y-1 text-xs">
+                    <p className="font-medium">NM Market Price: ${data.nm_market_price.toFixed(2)}</p>
+                    {estimates.map((e) => (
+                      <p key={e.condition} className="text-muted-foreground">
+                        {e.label} estimate: ${e.estimated_price.toFixed(2)}
+                      </p>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
