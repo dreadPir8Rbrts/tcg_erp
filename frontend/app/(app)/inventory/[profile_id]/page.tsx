@@ -376,8 +376,12 @@ export default function InventoryPage() {
         params.grading_company = compsGradingCompany;
         if (compsGrade) params.grade = compsGrade;
       }
-      const result = await getSoldComps(confirm.card.id, params);
-      setCompsResult(result);
+      let response = await getSoldComps(confirm.card.id, params);
+      while (response.http_status === 202) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        response = await getSoldComps(confirm.card.id, params);
+      }
+      setCompsResult(response.data);
     } catch (e) {
       setCompsError(e instanceof Error ? e.message : "Failed to fetch sold comps");
     } finally {

@@ -20,7 +20,7 @@ condition_ungraded.
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
@@ -88,6 +88,36 @@ def _enqueue_on_demand(card_v2_id: uuid.UUID) -> bool:
         return True
     except Exception as exc:
         logger.error("Failed to enqueue scrape task for %s: %s", card_v2_id, exc)
+        return False
+
+
+def _enqueue_ebay_on_demand(
+    card_v2_id: uuid.UUID,
+    grading_company: Optional[str],
+    grade: Optional[str],
+    condition_type: Optional[str],
+) -> bool:
+    """Enqueue scrape_ebay_on_demand on the droplet. Returns True if enqueued."""
+    scraper = _get_scraper_app()
+    if scraper is None:
+        logger.warning(
+            "SCRAPER_REDIS_URL not set — skipping eBay on-demand enqueue for %s", card_v2_id
+        )
+        return False
+    try:
+        scraper.send_task(
+            "prices.scrape_ebay_on_demand",
+            args=[str(card_v2_id)],
+            kwargs={
+                "grading_company": grading_company,
+                "grade":           grade,
+                "condition_type":  condition_type,
+            },
+        )
+        logger.info("Enqueued scrape_ebay_on_demand for %s (%s %s)", card_v2_id, grading_company, grade)
+        return True
+    except Exception as exc:
+        logger.error("Failed to enqueue eBay scrape task for %s: %s", card_v2_id, exc)
         return False
 
 
@@ -190,9 +220,13 @@ def get_card_pricing(
     }
 
 
+COMPS_FRESHNESS_DAYS = 7
+
+
 @router.get("/cards/{card_v2_id}/sold-comps")
 def get_card_sold_comps(
     card_v2_id: uuid.UUID,
+    response: Response,
     condition_type: Optional[str] = Query(None, description="'ungraded' or 'graded'"),
     grading_company: Optional[str] = Query(None, description="'psa', 'bgs', 'cgc', 'other'"),
     grade: Optional[str] = Query(None, description="e.g. '10', '9.5'"),
@@ -202,22 +236,37 @@ def get_card_sold_comps(
 ) -> Dict[str, Any]:
     """Return recent eBay sold comps for a card with optional condition filters.
 
-    Results are ordered by sold_date descending (most recent first).
-    Returns an empty list (not 404) if no comps exist yet.
-    """
-    query = db.query(SoldComp).filter(SoldComp.card_v2_id == card_v2_id)
+    Returns 200 with comps data when fresh data exists.
+    Returns 202 with { "status": "pending" } when no fresh data exists —
+    an on-demand scrape has been enqueued and the client should poll.
 
+    Results are ordered by sold_date descending (most recent first).
+    """
+    cutoff = datetime.utcnow() - timedelta(days=COMPS_FRESHNESS_DAYS)
+    freshness_query = db.query(SoldComp).filter(
+        SoldComp.card_v2_id == card_v2_id,
+        SoldComp.fetched_at >= cutoff,
+    )
     if condition_type is not None:
-        query = query.filter(SoldComp.condition_type == condition_type)
+        freshness_query = freshness_query.filter(SoldComp.condition_type == condition_type)
     if grading_company is not None:
-        query = query.filter(SoldComp.grading_company == grading_company)
+        freshness_query = freshness_query.filter(SoldComp.grading_company == grading_company)
     if grade is not None:
-        query = query.filter(SoldComp.grade == grade)
+        freshness_query = freshness_query.filter(SoldComp.grade == grade)
     if condition_ungraded is not None:
-        query = query.filter(SoldComp.condition_ungraded == condition_ungraded)
+        freshness_query = freshness_query.filter(SoldComp.condition_ungraded == condition_ungraded)
+
+    if freshness_query.first() is None:
+        _enqueue_ebay_on_demand(card_v2_id, grading_company, grade, condition_type)
+        response.status_code = status.HTTP_202_ACCEPTED
+        return {
+            "card_v2_id": str(card_v2_id),
+            "status": "pending",
+            "message": "Sold comps are being fetched. Please try again shortly.",
+        }
 
     comps = (
-        query
+        freshness_query
         .order_by(SoldComp.sold_date.desc().nullslast())
         .limit(limit)
         .all()
@@ -225,6 +274,7 @@ def get_card_sold_comps(
 
     return {
         "card_v2_id": str(card_v2_id),
+        "status": "ready",
         "total": len(comps),
         "comps": [_sold_comp_response(c) for c in comps],
     }

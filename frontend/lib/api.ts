@@ -581,10 +581,11 @@ export async function getCardPricing(
   return { http_status: res.status, data };
 }
 
+/** Returns the HTTP status alongside the parsed body so callers can distinguish 200 vs 202. */
 export async function getSoldComps(
   cardV2Id: string,
   params: SoldCompsParams = {}
-): Promise<SoldCompsResponse> {
+): Promise<{ http_status: number; data: SoldCompsResponse }> {
   const qs = new URLSearchParams();
   if (params.condition_type) qs.set("condition_type", params.condition_type);
   if (params.grading_company) qs.set("grading_company", params.grading_company);
@@ -595,7 +596,8 @@ export async function getSoldComps(
     headers: await authHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to load sold comps: ${res.status}`);
-  return res.json();
+  const data: SoldCompsResponse = await res.json();
+  return { http_status: res.status, data };
 }
 
 // ---------------------------------------------------------------------------
