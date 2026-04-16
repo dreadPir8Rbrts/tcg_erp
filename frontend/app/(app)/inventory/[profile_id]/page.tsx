@@ -192,6 +192,7 @@ export default function InventoryPage() {
   const [pricingResult, setPricingResult] = useState<unknown>(null);
   const [pricingLoading, setPricingLoading] = useState(false);
   const [pricingError, setPricingError] = useState<string | null>(null);
+  const pricingPrefetchRef = useRef<Promise<unknown> | null>(null);
 
   // Sold comps debug
   const [compsConditionType, setCompsConditionType] = useState<"ungraded" | "graded">("ungraded");
@@ -263,6 +264,7 @@ export default function InventoryPage() {
     setNotes("");
     setAddError(null);
     // Reset pricing debug state for the new card
+    pricingPrefetchRef.current = null;
     setPricingResult(null);
     setPricingError(null);
     setCompsResult(null);
@@ -271,6 +273,7 @@ export default function InventoryPage() {
     setCompsConditionUngraded("nm");
     setCompsGradingCompany("psa");
     setCompsGrade("");
+    prefetchPricing(card.id);
   }
 
   async function handleScan(file: File, mode: ScanMode) {
@@ -325,18 +328,33 @@ export default function InventoryPage() {
     }
   }
 
+  function prefetchPricing(cardId: string) {
+    pricingPrefetchRef.current = (async () => {
+      let result = await getCardPricing(cardId);
+      while ((result as { http_status: number }).http_status === 202) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        result = await getCardPricing(cardId);
+      }
+      return result;
+    })();
+  }
+
   async function handleFetchPricing() {
     if (!confirm) return;
     setPricingLoading(true);
     setPricingError(null);
     setPricingResult(null);
     try {
-      let result = await getCardPricing(confirm.card.id);
-      // If the scraper task was just enqueued (202), poll until data is ready
-      while ((result as { http_status: number }).http_status === 202) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        result = await getCardPricing(confirm.card.id);
-      }
+      const result = pricingPrefetchRef.current
+        ? await pricingPrefetchRef.current
+        : await (async () => {
+            let r = await getCardPricing(confirm.card.id);
+            while ((r as { http_status: number }).http_status === 202) {
+              await new Promise((resolve) => setTimeout(resolve, 3000));
+              r = await getCardPricing(confirm.card.id);
+            }
+            return r;
+          })();
       setPricingResult(result);
     } catch (e) {
       setPricingError(e instanceof Error ? e.message : "Failed to fetch pricing");
