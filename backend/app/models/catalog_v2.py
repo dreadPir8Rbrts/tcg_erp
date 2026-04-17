@@ -32,6 +32,7 @@ class ExpansionV2(Base):
     external_id: Mapped[str] = mapped_column(String(), nullable=False)
     game: Mapped[str] = mapped_column(String(), nullable=False)
     name: Mapped[str] = mapped_column(String(), nullable=False)
+    name_en: Mapped[Optional[str]] = mapped_column(String(), nullable=True)
 
     # Pokemon-only
     series: Mapped[Optional[str]] = mapped_column(String(), nullable=True)
@@ -71,6 +72,7 @@ class CardV2(Base):
         UUID(as_uuid=True), ForeignKey("public.expansions_v2.id", name="fk_cards_v2_expansion_id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(), nullable=False)
+    en_name: Mapped[Optional[str]] = mapped_column(String(), nullable=True)
     number: Mapped[Optional[str]] = mapped_column(String(), nullable=True)
     printed_number: Mapped[Optional[str]] = mapped_column(String(), nullable=True)
     rarity: Mapped[Optional[str]] = mapped_column(String(), nullable=True)

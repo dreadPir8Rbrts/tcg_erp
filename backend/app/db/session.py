@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     anthropic_api_key: Optional[str] = None
     google_credentials_base64: str = ""
+    google_translate_api_key: Optional[str] = None
     justtcg_api_key: Optional[str] = None
     pokedata_api_key: Optional[str] = None
     v2_api_key: Optional[str] = None

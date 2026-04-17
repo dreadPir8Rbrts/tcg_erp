@@ -139,7 +139,9 @@ def smart_search_cards(
             query = query.filter(
                 or_(
                     CardV2.name.ilike(f"%{word}%"),
+                    CardV2.en_name.ilike(f"%{word}%"),
                     ExpansionV2.name.ilike(f"%{word}%"),
+                    ExpansionV2.name_en.ilike(f"%{word}%"),
                 )
             )
 
