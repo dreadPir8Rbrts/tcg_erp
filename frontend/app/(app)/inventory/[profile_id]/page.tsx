@@ -231,16 +231,20 @@ export default function InventoryPage() {
 
   // Tokenizer for smart search: extracts card_num and language_code, passes remainder as q
   function parseSearchQuery(raw: string): { q?: string; card_num?: string; language_code?: string } {
-    const LANG_CODES = new Set(["en", "ja", "fr", "de", "es", "it", "pt", "ko"]);
+    const LANG_ALIASES: Record<string, string> = {
+      en: "en", english: "en",
+      ja: "ja", japanese: "ja",
+    };
     const tokens = raw.trim().split(/\s+/);
     let card_num: string | undefined;
     let language_code: string | undefined;
     const remaining: string[] = [];
     for (const token of tokens) {
+      const langKey = token.toLowerCase();
       if (/^\d+(?:\/\d+)?$/.test(token) && !card_num) {
         card_num = token;
-      } else if (LANG_CODES.has(token.toLowerCase()) && !language_code) {
-        language_code = token.toLowerCase();
+      } else if (langKey in LANG_ALIASES && !language_code) {
+        language_code = LANG_ALIASES[langKey];
       } else {
         remaining.push(token);
       }

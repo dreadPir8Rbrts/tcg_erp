@@ -25,6 +25,15 @@ router = APIRouter(tags=["catalog"])
 # Helpers
 # ---------------------------------------------------------------------------
 
+_LANG_MAP = {
+    "en": "EN", "english": "EN",
+    "ja": "JA", "japanese": "JA",
+}
+
+def _normalize_lang(code: str) -> str:
+    return _LANG_MAP.get(code.lower(), code.upper())
+
+
 def _extract_image_url(images: Optional[list]) -> Optional[str]:
     """Pull the small image URL from the V2 API images array (suitable for thumbnails)."""
     if not images:
@@ -167,7 +176,7 @@ def smart_search_cards(
             )
 
     if language_code:
-        query = query.filter(CardV2.language_code == language_code.lower())
+        query = query.filter(CardV2.language_code == _normalize_lang(language_code))
 
     rows = query.order_by(CardV2.name).offset(offset).limit(limit).all()
     return [_build_card_response(card, expansion) for card, expansion in rows]
@@ -236,7 +245,7 @@ def search_cards(
     if game:
         query = query.filter(CardV2.game == game)
     if language_code:
-        query = query.filter(CardV2.language_code == language_code)
+        query = query.filter(CardV2.language_code == _normalize_lang(language_code))
     if set_name:
         query = query.filter(ExpansionV2.name.ilike(f"%{set_name}%"))
 
