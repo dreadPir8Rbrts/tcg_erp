@@ -13,9 +13,9 @@ export default function PublicLayout({
 }) {
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="h-14 border-b bg-background flex items-center px-6 sticky top-0 z-50">
-        <Link href="/" className="font-bold text-lg">
-          CardOps
+      <header className="h-14 border-b bg-card flex items-center px-6 sticky top-0 z-50">
+        <Link href="/" className="font-brand text-sm tracking-tight">
+          leftovers<span className="text-emerald-500">.gg</span>
         </Link>
         <div className="flex-1" />
         <nav className="flex items-center gap-3">

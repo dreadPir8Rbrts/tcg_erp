@@ -2,7 +2,7 @@
 
 /**
  * Persistent top navigation bar for the authenticated app shell.
- * Contains: CardOps logo | spacer | RoleToggle | AvatarDropdown
+ * Contains: leftovers.gg logo | spacer | RoleToggle | AvatarDropdown
  */
 
 import Link from "next/link";
@@ -16,9 +16,9 @@ interface TopNavProps {
 
 export function TopNav({ profile }: TopNavProps) {
   return (
-    <header className="h-14 border-b bg-background flex items-center px-4 gap-4 sticky top-0 z-50 shrink-0">
-      <Link href="/" className="font-bold text-lg">
-        CardOps
+    <header className="h-14 border-b bg-card flex items-center px-4 gap-4 sticky top-0 z-50 shrink-0">
+      <Link href="/" className="font-brand text-sm tracking-tight text-foreground">
+        leftovers<span className="text-emerald-500">.gg</span>
       </Link>
       <div className="flex-1" />
       {profile && <RoleToggle />}

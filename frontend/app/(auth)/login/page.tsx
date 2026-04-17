@@ -63,7 +63,7 @@ export default function LoginPage() {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
-        <CardTitle>Sign in to CardOps</CardTitle>
+        <CardTitle>Sign in to leftovers.gg</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
