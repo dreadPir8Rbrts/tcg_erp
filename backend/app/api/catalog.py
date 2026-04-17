@@ -102,6 +102,77 @@ def _build_expansion_response(expansion: ExpansionV2) -> dict:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@router.get("/cards/search", response_model=List[CardDetailResponse])
+def smart_search_cards(
+    q: Optional[str] = Query(None, min_length=2, description="Free-text: each word matched against card name or expansion name"),
+    card_num: Optional[str] = Query(None, description="Card number — supports leading zeros and printed format (e.g. 034, 170/165)"),
+    language_code: Optional[str] = Query(None, description="Language code e.g. en, ja"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Smart search: each token in q must appear in card name OR expansion name.
+
+    Designed for free-text inventory lookups like 'jolteon prismatic' or
+    'charizard ex scarlet violet'. card_num is extracted separately so
+    'squirtle 170 ja' becomes q=squirtle, card_num=170, language_code=ja.
+    """
+    if not any([q, card_num]):
+        raise HTTPException(status_code=422, detail="At least one of q or card_num is required.")
+
+    query = (
+        db.query(CardV2, ExpansionV2)
+        .join(ExpansionV2, CardV2.expansion_id == ExpansionV2.id)
+    )
+
+    if q:
+        for word in q.strip().split():
+            query = query.filter(
+                or_(
+                    CardV2.name.ilike(f"%{word}%"),
+                    ExpansionV2.name.ilike(f"%{word}%"),
+                )
+            )
+
+    if card_num:
+        if "/" in card_num:
+            parts = card_num.split("/", 1)
+            num_part = parts[0].lstrip("0") or "0"
+            try:
+                total_int = int(parts[1].strip())
+                query = query.filter(
+                    or_(
+                        CardV2.printed_number == card_num,
+                        and_(
+                            CardV2.number == num_part,
+                            ExpansionV2.printed_total == total_int,
+                        ),
+                    )
+                )
+            except ValueError:
+                num_stripped = card_num.lstrip("0") or card_num
+                query = query.filter(
+                    or_(
+                        CardV2.number.ilike(f"%{num_stripped}%"),
+                        CardV2.printed_number.ilike(f"%{card_num}%"),
+                    )
+                )
+        else:
+            num_stripped = card_num.lstrip("0") or card_num
+            query = query.filter(
+                or_(
+                    CardV2.number.ilike(f"%{num_stripped}%"),
+                    CardV2.printed_number.ilike(f"%{card_num}%"),
+                )
+            )
+
+    if language_code:
+        query = query.filter(CardV2.language_code == language_code.lower())
+
+    rows = query.order_by(CardV2.name).offset(offset).limit(limit).all()
+    return [_build_card_response(card, expansion) for card, expansion in rows]
+
+
 @router.get("/cards/{card_id}", response_model=CardDetailResponse)
 def get_card(card_id: str, db: Session = Depends(get_db)):
     row = (

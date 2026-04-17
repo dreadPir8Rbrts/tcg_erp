@@ -15,6 +15,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import {
   searchCards,
+  searchCardsSmart,
   identifyCard,
   quickIdentifyCard,
   addInventoryItem,
@@ -165,6 +166,13 @@ export default function InventoryPage() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
+  // Advanced search
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advName, setAdvName] = useState("");
+  const [advNum, setAdvNum] = useState("");
+  const [advSet, setAdvSet] = useState("");
+  const [advLang, setAdvLang] = useState("");
+
   // Scan
   const [scanMenuOpen, setScanMenuOpen] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -221,47 +229,38 @@ export default function InventoryPage() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  // Debounced search
+  // Tokenizer for smart search: extracts card_num and language_code, passes remainder as q
+  function parseSearchQuery(raw: string): { q?: string; card_num?: string; language_code?: string } {
+    const LANG_CODES = new Set(["en", "ja", "fr", "de", "es", "it", "pt", "ko"]);
+    const tokens = raw.trim().split(/\s+/);
+    let card_num: string | undefined;
+    let language_code: string | undefined;
+    const remaining: string[] = [];
+    for (const token of tokens) {
+      if (/^\d+(?:\/\d+)?$/.test(token) && !card_num) {
+        card_num = token;
+      } else if (LANG_CODES.has(token.toLowerCase()) && !language_code) {
+        language_code = token.toLowerCase();
+      } else {
+        remaining.push(token);
+      }
+    }
+    return {
+      ...(remaining.length > 0 ? { q: remaining.join(" ") } : {}),
+      ...(card_num ? { card_num } : {}),
+      ...(language_code ? { language_code } : {}),
+    };
+  }
+
+  // Debounced smart search
   useEffect(() => {
     if (!query.trim()) { setSearchResults(null); return; }
     const timer = setTimeout(async () => {
       setSearching(true);
       setSearchError(null);
       try {
-        const trimmed = query.trim();
-        const nameAndNum = trimmed.match(/^(.+?)\s+(\d+(?:\/\d+)?)$/);
-
-        let results: Card[];
-        if (/^\d/.test(trimmed)) {
-          // Starts with a digit: treat as card number
-          results = await searchCards({ card_num: trimmed });
-        } else if (nameAndNum) {
-          // "squirtle 170" or "charizard 4/102" → name + card_num
-          results = await searchCards({ name: nameAndNum[1], card_num: nameAndNum[2] });
-        } else {
-          // Text-only: search name, set_name, and (for multi-word) name+set split in parallel
-          const words = trimmed.split(/\s+/);
-          const calls: Promise<Card[]>[] = [
-            searchCards({ name: trimmed }).catch(() => []),
-            searchCards({ set_name: trimmed }).catch(() => []),
-          ];
-          if (words.length > 1) {
-            calls.push(
-              searchCards({
-                name: words.slice(0, -1).join(" "),
-                set_name: words[words.length - 1],
-              }).catch(() => [])
-            );
-          }
-          const batches = await Promise.all(calls);
-          const seen = new Map<string, Card>();
-          for (const batch of batches) {
-            for (const card of batch) {
-              if (!seen.has(card.id)) seen.set(card.id, card);
-            }
-          }
-          results = Array.from(seen.values());
-        }
+        const params = parseSearchQuery(query);
+        const results = await searchCardsSmart(params);
         setSearchResults(results);
       } catch {
         setSearchError("Search failed. Please try again.");
@@ -299,6 +298,25 @@ export default function InventoryPage() {
     setCompsGradingCompany("psa");
     setCompsGrade("");
     prefetchPricing(card.id);
+  }
+
+  async function handleAdvancedSearch() {
+    if (!advName && !advNum && !advSet) return;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      const results = await searchCards({
+        ...(advName ? { name: advName } : {}),
+        ...(advNum ? { card_num: advNum } : {}),
+        ...(advSet ? { set_name: advSet } : {}),
+        ...(advLang ? { language_code: advLang } : {}),
+      });
+      setSearchResults(results);
+    } catch {
+      setSearchError("Search failed. Please try again.");
+    } finally {
+      setSearching(false);
+    }
   }
 
   async function handleScan(file: File, mode: ScanMode) {
@@ -475,11 +493,12 @@ export default function InventoryPage() {
             <input
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by card name or number..."
+              onChange={(e) => { setQuery(e.target.value); if (showAdvanced) setShowAdvanced(false); }}
+              placeholder="e.g. squirtle 170, jolteon prismatic, 034/193 ja…"
               className="w-full border rounded-md px-3 py-2 text-sm bg-background"
+              disabled={showAdvanced}
             />
-            {searching && (
+            {searching && !showAdvanced && (
               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">…</span>
             )}
           </div>
@@ -546,6 +565,85 @@ export default function InventoryPage() {
             }}
           />
         </div>
+
+        {/* Advanced search toggle */}
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => { setShowAdvanced((v) => !v); setSearchResults(null); setQuery(""); }}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showAdvanced ? "← Smart search" : "Advanced search →"}
+          </button>
+          {showAdvanced && (
+            <span className="text-xs text-muted-foreground">Fill any combination of fields</span>
+          )}
+        </div>
+
+        {/* Advanced search panel */}
+        {showAdvanced && (
+          <div className="border rounded-md p-3 space-y-2 bg-muted/20">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Name</label>
+                <input
+                  type="text"
+                  value={advName}
+                  onChange={(e) => setAdvName(e.target.value)}
+                  placeholder="e.g. Charizard Ex"
+                  className="w-full border rounded-md px-2 py-1.5 text-sm bg-background"
+                  onKeyDown={(e) => e.key === "Enter" && handleAdvancedSearch()}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Number</label>
+                <input
+                  type="text"
+                  value={advNum}
+                  onChange={(e) => setAdvNum(e.target.value)}
+                  placeholder="e.g. 170 or 034/193"
+                  className="w-full border rounded-md px-2 py-1.5 text-sm bg-background"
+                  onKeyDown={(e) => e.key === "Enter" && handleAdvancedSearch()}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Set Name</label>
+                <input
+                  type="text"
+                  value={advSet}
+                  onChange={(e) => setAdvSet(e.target.value)}
+                  placeholder="e.g. Prismatic Evolutions"
+                  className="w-full border rounded-md px-2 py-1.5 text-sm bg-background"
+                  onKeyDown={(e) => e.key === "Enter" && handleAdvancedSearch()}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Language</label>
+                <select
+                  value={advLang}
+                  onChange={(e) => setAdvLang(e.target.value)}
+                  className="w-full border rounded-md px-2 py-1.5 text-sm bg-background"
+                >
+                  <option value="">Any</option>
+                  <option value="en">English</option>
+                  <option value="ja">Japanese</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="es">Spanish</option>
+                  <option value="it">Italian</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="ko">Korean</option>
+                </select>
+              </div>
+            </div>
+            <button
+              onClick={handleAdvancedSearch}
+              disabled={searching || (!advName && !advNum && !advSet)}
+              className="w-full py-1.5 text-sm rounded-md bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
+            >
+              {searching ? "Searching…" : "Search"}
+            </button>
+          </div>
+        )}
 
         {(searchError || scanError) && (
           <p className="text-xs text-destructive">{searchError ?? scanError}</p>
