@@ -147,6 +147,7 @@ class SoldComp(Base):
     grading_company = Column(String(10), nullable=True)
     grade = Column(String(30), nullable=True)
     grading_company_other = Column(String(100), nullable=True)
+    sale_type = Column(String(20), nullable=True)
     fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 

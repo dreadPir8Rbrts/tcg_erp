@@ -60,6 +60,22 @@
 
 ## Session corrections
 
+### 2026-04-16 — Always pull latest on the app droplet before testing new endpoints
+**Rule:** After merging backend changes that affect API behaviour (e.g. new 202 response paths, enqueue logic), pull and restart `cardops-app` on the app droplet before testing via the frontend. A stale deployment runs the old code silently — no error, just wrong behaviour. Commands: `git pull && sudo systemctl restart cardops-app`.
+**Context:** `cardops-app.service` on app droplet (134.209.170.89)
+
+### 2026-04-16 — eBay HTML layout changed from li.s-item to li.s-card
+**Rule:** eBay's completed-listings page uses `li.s-card` as the listing container (not `li.s-item` as older docs/examples show). Current working selectors: title → `.s-card__title span.su-styled-text.primary`, price → `span.s-card__price`, sold date → `span[aria-label='Sold Item']`, subtitle → `.s-card__subtitle span`, link → `a.s-card__link`. When the parser returns 0 results despite a large HTML response, add a `_diagnose_html()` step to print tag/class counts before debugging selectors.
+**Context:** `app/services/ebay.py` `_fetch_raw_listings()`
+
+### 2026-04-16 — Route eBay fetches through Web Unlocker; direct requests get 503
+**Rule:** Direct httpx requests to eBay from the scraper droplet receive 503 (datacenter IP block). All eBay fetches must go through Bright Data Web Unlocker (`POST https://api.brightdata.com/request` with `{"zone": "cardops_scraper", "url": ..., "format": "raw"}`). Same zone/endpoint as TCGPlayer.
+**Context:** `app/services/ebay.py` `_fetch_raw_listings()`
+
+### 2026-04-16 — Separate on-demand eBay task from the TCGPlayer on-demand task
+**Rule:** `prices.scrape_card_on_demand` (in `on_demand.py`) handles TCGPlayer pricing. `prices.scrape_ebay_on_demand` (in `ebay_on_demand.py`) handles eBay comps. These are two distinct tasks triggered by two distinct endpoints: `/pricing` enqueues TCGPlayer; `/sold-comps` enqueues eBay. Never merge them — the user may want one without the other, and they have different freshness and filter logic.
+**Context:** `backend/app/api/pricing.py`, `app/tasks/on_demand.py`, `app/tasks/ebay_on_demand.py`
+
 ### 2026-04-10 — Supabase direct connection fails from DO droplet (IPv6 issue)
 **Rule:** The Supabase direct connection URL (port 5432, `db.xxx.supabase.co`) resolves to an IPv6 address which DigitalOcean droplets cannot reach without the paid IPv4 add-on. Always use the **transaction pooler URL** (port 6543) for application connections from DO droplets. The pooler resolves to IPv4 and works without any add-on. Only the direct URL is needed for Alembic — run migrations from a machine that can reach IPv6, or enable the Supabase IPv4 add-on (~$4/mo).
 **Context:** `backend/.env` `DATABASE_URL`, scraper `DATABASE_URL`, any DO-hosted service

@@ -855,13 +855,89 @@ export default function InventoryPage() {
                 {compsLoading ? "Fetching…" : "Fetch Data"}
               </Button>
               {compsError && <p className="text-xs text-destructive">{compsError}</p>}
-              {compsResult !== null && (
-                <pre className="text-xs bg-background border rounded p-2 overflow-auto max-h-52 whitespace-pre-wrap break-all">
-                  {JSON.stringify(compsResult, null, 2)}
-                </pre>
+              {compsLoading && (
+                <p className="text-xs text-muted-foreground animate-pulse">Fetching sold listings…</p>
+              )}
+              {compsResult !== null && !compsLoading && (
+                <div className="space-y-1.5">
+                  <p className="text-xs text-muted-foreground">
+                    {compsResult.total === 0
+                      ? "No recent sales found."
+                      : `${compsResult.total} recent sale${compsResult.total !== 1 ? "s" : ""}`}
+                  </p>
+                  {compsResult.comps.length > 0 && (
+                    <div className="border rounded-md overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-muted text-muted-foreground">
+                          <tr>
+                            <th className="text-left px-2 py-1.5 font-medium">Date</th>
+                            <th className="text-left px-2 py-1.5 font-medium">Title</th>
+                            <th className="text-left px-2 py-1.5 font-medium">Condition</th>
+                            <th className="text-left px-2 py-1.5 font-medium">Sale Type</th>
+                            <th className="text-right px-2 py-1.5 font-medium">Price</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {compsResult.comps.map((comp) => (
+                            <tr
+                              key={comp.id}
+                              className="hover:bg-muted/40 transition-colors cursor-pointer"
+                              onClick={() => window.open(comp.listing_url, "_blank", "noopener,noreferrer")}
+                            >
+                              <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
+                                {comp.sold_date
+                                  ? new Date(comp.sold_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                                  : "—"}
+                              </td>
+                              <td className="px-2 py-1.5 max-w-[180px]">
+                                <span className="truncate block text-foreground" title={comp.title}>
+                                  {comp.title}
+                                </span>
+                              </td>
+                              <td className="px-2 py-1.5 whitespace-nowrap">
+                                {comp.condition_type === "graded" && comp.grading_company && comp.grade ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 font-medium">
+                                    {comp.grading_company.toUpperCase()} {comp.grade}
+                                  </span>
+                                ) : comp.condition_ungraded ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                    {comp.condition_ungraded}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5 whitespace-nowrap">
+                                {comp.sale_type === "buy_now" && (
+                                  <span className="inline-flex px-1.5 py-0.5 rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 font-medium">Buy Now</span>
+                                )}
+                                {comp.sale_type === "auction" && (
+                                  <span className="inline-flex px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300 font-medium">Auction</span>
+                                )}
+                                {comp.sale_type === "obo" && (
+                                  <span className="inline-flex px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 font-medium">OBO</span>
+                                )}
+                                {!comp.sale_type && <span className="text-muted-foreground">—</span>}
+                              </td>
+                              <td className="px-2 py-1.5 text-right font-medium whitespace-nowrap">
+                                {comp.currency === "USD" ? "$" : comp.currency}{Number(comp.price).toFixed(2)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <details className="mt-2">
+                    <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground">Raw JSON</summary>
+                    <pre className="mt-1 text-xs bg-muted border rounded p-2 overflow-auto max-h-64 whitespace-pre-wrap break-all">
+                      {JSON.stringify(compsResult, null, 2)}
+                    </pre>
+                  </details>
+                </div>
               )}
             </div>
-            {/* ---- end pricing debug ---- */}
+            {/* ---- end sold comps ---- */}
 
             {addError && <p className="text-xs text-destructive">{addError}</p>}
 

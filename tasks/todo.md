@@ -114,8 +114,10 @@
 ### Main app backend
 - [x] `SoldComp` SQLAlchemy model added to `models/catalog.py`
 - [x] `GET /api/v1/cards/{card_v2_id}/pricing` — NM anchor + condition estimates; returns 202 + enqueues on-demand scrape when stale
-- [x] `GET /api/v1/cards/{card_v2_id}/sold-comps` — filtered sold comps (condition_type, grading_company, grade, condition_ungraded)
+- [x] `GET /api/v1/cards/{card_v2_id}/sold-comps` — filtered sold comps; returns 202 + enqueues `scrape_ebay_on_demand` when no fresh data
 - [x] `SCRAPER_REDIS_URL` setting added — points to scraper droplet private IP
+- [x] Frontend raw prices — spinner on 202, formatted price table on 200, auto-polling, silent prefetch on card select
+- [x] Frontend sold comps — polling loop wired; awaits 202→200 before setting result (UI display is debug JSON for now)
 
 ### Infrastructure
 - [x] App droplet deployed (134.209.170.89, NYC3, 2GB) — FastAPI + Nginx
@@ -127,11 +129,12 @@
 
 ## Active — next up
 
-- [ ] Frontend pricing component:
-  - Ungraded pricing dropdown: NM (TCGPlayer) + LP/MP/HP/DMG estimates
-  - "View recent sales" per condition → sold comps inline
-  - Graded pricing dropdown: grader selector + grade selector + sold comps
-  - Polling state: "pricing loading..." while 202 pending → auto-refresh on ready
+- [ ] Frontend sold comps UI (inventory card panel):
+  - Condition/grader/grade selector (already wired to handleFetchComps)
+  - Replace raw `JSON.stringify` debug display with a proper comps table:
+    - Columns: sold_date, title (truncated), price, condition/grade badge, listing_url link
+    - Handle empty state ("No recent sales found")
+    - Handle loading state (spinner during polling)
 - [ ] SSL/domain setup on app droplet (Certbot)
 - [ ] Update frontend API base URL from localhost:8000 → http://134.209.170.89
 
@@ -143,5 +146,6 @@
 - [ ] One Piece scan support
 - [ ] Wishlist backend + frontend
 - [ ] Drop legacy card_id column from vendor_inventory (migration 0018)
-- [ ] Validate eBay scraper CSS selectors against live eBay HTML
+- [ ] Alembic migration: add `tcgplayer_url` to `cards_v2` (skip DDG search on repeat scrapes)
+- [ ] Wire `tcgplayer_url` caching into `on_demand.py` (read if set, write after first search)
 - [ ] Validate TCGPlayer scraper JSON extraction patterns

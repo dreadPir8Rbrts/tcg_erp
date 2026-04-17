@@ -553,6 +553,7 @@ export interface SoldComp {
   grading_company: string | null;
   grade: string | null;
   grading_company_other: string | null;
+  sale_type: string | null;
   fetched_at: string;
 }
 

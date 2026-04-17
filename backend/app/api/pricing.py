@@ -150,6 +150,7 @@ def _sold_comp_response(comp: SoldComp) -> Dict[str, Any]:
         "grading_company": comp.grading_company,
         "grade": comp.grade,
         "grading_company_other": comp.grading_company_other,
+        "sale_type": comp.sale_type,
         "fetched_at": comp.fetched_at.isoformat(),
     }
 
