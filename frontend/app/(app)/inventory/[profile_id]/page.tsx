@@ -865,8 +865,25 @@ export default function InventoryPage() {
                       ? "No recent sales found."
                       : `${compsResult.total} recent sale${compsResult.total !== 1 ? "s" : ""}`}
                   </p>
-                  {compsResult.comps.length > 0 && (
-                    <div className="border rounded-md overflow-hidden">
+                  {compsResult.comps.length > 0 && (() => {
+                    const prices = compsResult.comps.map((c) => c.price);
+                    const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
+                    const dates = compsResult.comps
+                      .map((c) => c.sold_date ? new Date(c.sold_date) : null)
+                      .filter((d): d is Date => d !== null);
+                    const minDate = dates.length ? new Date(Math.min(...dates.map((d) => d.getTime()))) : null;
+                    const maxDate = dates.length ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
+                    const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                    return (
+                      <>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground px-0.5">
+                          <span>Avg: <span className="font-medium text-foreground">${avg.toFixed(2)}</span></span>
+                          <span>Range: <span className="font-medium text-foreground">${Math.min(...prices).toFixed(2)} – ${Math.max(...prices).toFixed(2)}</span></span>
+                          {minDate && maxDate && (
+                            <span>Dates: <span className="font-medium text-foreground">{fmt(minDate)} – {fmt(maxDate)}</span></span>
+                          )}
+                        </div>
+                        <div className="border rounded-md overflow-hidden">
                       <table className="w-full text-xs">
                         <thead className="bg-muted text-muted-foreground">
                           <tr>
@@ -927,7 +944,9 @@ export default function InventoryPage() {
                         </tbody>
                       </table>
                     </div>
-                  )}
+                      </>
+                    );
+                  })()}
                   <details className="mt-2">
                     <summary className="text-xs text-muted-foreground cursor-pointer select-none hover:text-foreground">Raw JSON</summary>
                     <pre className="mt-1 text-xs bg-muted border rounded p-2 overflow-auto max-h-64 whitespace-pre-wrap break-all">
