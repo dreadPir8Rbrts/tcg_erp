@@ -111,6 +111,27 @@ export interface CardSearchParams {
   limit?: number;
 }
 
+export interface SmartSearchParams {
+  q?: string;
+  card_num?: string;
+  language_code?: string;
+  limit?: number;
+}
+
+// Smart search — free-text q matched token-by-token against card name + set name
+export async function searchCardsSmart(params: SmartSearchParams): Promise<Card[]> {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set("q", params.q);
+  if (params.card_num) qs.set("card_num", params.card_num);
+  if (params.language_code) qs.set("language_code", params.language_code);
+  qs.set("limit", String(params.limit ?? 20));
+  const res = await fetch(`${API_URL}/api/v1/cards/search?${qs.toString()}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+  return res.json();
+}
+
 // Search cards — any combination of name, card_num, game, language_code, set_name
 export async function searchCards(params: CardSearchParams): Promise<Card[]> {
   const qs = new URLSearchParams();
