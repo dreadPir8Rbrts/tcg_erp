@@ -229,18 +229,39 @@ export default function InventoryPage() {
       setSearchError(null);
       try {
         const trimmed = query.trim();
-        let params: Parameters<typeof searchCards>[0];
         const nameAndNum = trimmed.match(/^(.+?)\s+(\d+(?:\/\d+)?)$/);
+
+        let results: Card[];
         if (/^\d/.test(trimmed)) {
-          // Starts with a digit: treat as card number (e.g. "63", "063/131")
-          params = { card_num: trimmed };
+          // Starts with a digit: treat as card number
+          results = await searchCards({ card_num: trimmed });
         } else if (nameAndNum) {
-          // "squirtle 170" or "charizard 4/102" → split into name + card_num
-          params = { name: nameAndNum[1], card_num: nameAndNum[2] };
+          // "squirtle 170" or "charizard 4/102" → name + card_num
+          results = await searchCards({ name: nameAndNum[1], card_num: nameAndNum[2] });
         } else {
-          params = { name: trimmed };
+          // Text-only: search name, set_name, and (for multi-word) name+set split in parallel
+          const words = trimmed.split(/\s+/);
+          const calls: Promise<Card[]>[] = [
+            searchCards({ name: trimmed }).catch(() => []),
+            searchCards({ set_name: trimmed }).catch(() => []),
+          ];
+          if (words.length > 1) {
+            calls.push(
+              searchCards({
+                name: words.slice(0, -1).join(" "),
+                set_name: words[words.length - 1],
+              }).catch(() => [])
+            );
+          }
+          const batches = await Promise.all(calls);
+          const seen = new Map<string, Card>();
+          for (const batch of batches) {
+            for (const card of batch) {
+              if (!seen.has(card.id)) seen.set(card.id, card);
+            }
+          }
+          results = Array.from(seen.values());
         }
-        const results = await searchCards(params);
         setSearchResults(results);
       } catch {
         setSearchError("Search failed. Please try again.");
