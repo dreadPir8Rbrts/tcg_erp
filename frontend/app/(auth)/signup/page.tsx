@@ -37,7 +37,7 @@ export default function SignupPage() {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
-        <CardTitle>Create your CardOps account</CardTitle>
+        <CardTitle>Create your leftovers.gg account</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">

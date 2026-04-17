@@ -9,6 +9,12 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        brand:   ["var(--font-brand)", "monospace"],
+        heading: ["var(--font-heading)", "sans-serif"],
+        body:    ["var(--font-body)", "sans-serif"],
+        sans:    ["var(--font-body)", "sans-serif"],
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",

@@ -275,7 +275,7 @@ export default function OnboardingPage() {
           {state.step === 1 && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-xl font-semibold mb-1">Welcome to CardOps</h2>
+                <h2 className="text-xl font-semibold mb-1">Welcome to leftovers.gg</h2>
                 <p className="text-sm text-muted-foreground">
                   How will you primarily use the app? You can switch between roles at any time.
                 </p>
