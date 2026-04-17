@@ -155,7 +155,13 @@ def search_cards(
             except ValueError:
                 query = query.filter(CardV2.number.ilike(f"%{card_num}%"))
         else:
-            query = query.filter(CardV2.number.ilike(f"%{card_num}%"))
+            num_stripped = card_num.lstrip("0") or card_num
+            query = query.filter(
+                or_(
+                    CardV2.number.ilike(f"%{num_stripped}%"),
+                    CardV2.printed_number.ilike(f"%{card_num}%"),
+                )
+            )
     if game:
         query = query.filter(CardV2.game == game)
     if language_code:

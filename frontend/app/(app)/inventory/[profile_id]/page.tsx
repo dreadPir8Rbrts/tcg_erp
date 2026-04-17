@@ -230,9 +230,13 @@ export default function InventoryPage() {
       try {
         const trimmed = query.trim();
         let params: Parameters<typeof searchCards>[0];
+        const nameAndNum = trimmed.match(/^(.+?)\s+(\d+(?:\/\d+)?)$/);
         if (/^\d/.test(trimmed)) {
-          // Starts with a digit: treat as card number (handles plain "63", "063/131", etc.)
+          // Starts with a digit: treat as card number (e.g. "63", "063/131")
           params = { card_num: trimmed };
+        } else if (nameAndNum) {
+          // "squirtle 170" or "charizard 4/102" → split into name + card_num
+          params = { name: nameAndNum[1], card_num: nameAndNum[2] };
         } else {
           params = { name: trimmed };
         }
