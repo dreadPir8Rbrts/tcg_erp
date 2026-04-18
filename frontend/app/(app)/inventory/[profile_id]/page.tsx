@@ -118,6 +118,7 @@ function CardRow({ card, onSelect }: { card: Card; onSelect: (c: Card) => void }
           {card.set_name}{card.language_code === "JA" && card.set_name_en ? ` (${card.set_name_en})` : ""} · #{card.card_num}
         </p>
         {card.rarity && <p className="text-xs text-muted-foreground">{card.rarity}</p>}
+        <p className="text-xs text-muted-foreground">{card.language_code === "JA" ? "Japanese" : "English"}</p>
       </div>
     </button>
   );
@@ -143,8 +144,8 @@ function InventoryRow({ item }: { item: InventoryItemWithCard }) {
         <div className="flex items-center gap-2 mt-1">
           <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
           {item.rarity && <span className="text-xs text-muted-foreground">{item.rarity}</span>}
-          <span className="text-xs text-muted-foreground">{item.language_code === "JA" ? "Japanese" : "English"}</span>
         </div>
+        <p className="text-xs text-muted-foreground">{item.language_code === "JA" ? "Japanese" : "English"}</p>
       </div>
       <div className="text-right flex-shrink-0">
         {item.asking_price != null && (
