@@ -142,6 +142,7 @@ def smart_search_cards(
                     CardV2.en_name.ilike(f"%{word}%"),
                     ExpansionV2.name.ilike(f"%{word}%"),
                     ExpansionV2.name_en.ilike(f"%{word}%"),
+                    ExpansionV2.translation.ilike(f"%{word}%"),
                 )
             )
 
