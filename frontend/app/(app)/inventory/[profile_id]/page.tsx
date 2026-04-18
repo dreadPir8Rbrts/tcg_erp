@@ -117,8 +117,9 @@ function CardRow({ card, onSelect }: { card: Card; onSelect: (c: Card) => void }
         <p className="text-xs text-muted-foreground">
           {card.set_name}{card.language_code === "JA" && card.set_name_en ? ` (${card.set_name_en})` : ""} · #{card.card_num}
         </p>
-        {card.rarity && <p className="text-xs text-muted-foreground">{card.rarity}</p>}
-        <p className="text-xs text-muted-foreground">{card.language_code === "JA" ? "Japanese" : "English"}</p>
+        <p className="text-xs text-muted-foreground">
+          {[card.rarity, card.language_code === "JA" ? "Japanese" : "English"].filter(Boolean).join(" · ")}
+        </p>
       </div>
     </button>
   );
@@ -143,9 +144,10 @@ function InventoryRow({ item }: { item: InventoryItemWithCard }) {
         </p>
         <div className="flex items-center gap-2 mt-1">
           <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
-          {item.rarity && <span className="text-xs text-muted-foreground">{item.rarity}</span>}
+          <span className="text-xs text-muted-foreground">
+            {[item.rarity, item.language_code === "JA" ? "Japanese" : "English"].filter(Boolean).join(" · ")}
+          </span>
         </div>
-        <p className="text-xs text-muted-foreground">{item.language_code === "JA" ? "Japanese" : "English"}</p>
       </div>
       <div className="text-right flex-shrink-0">
         {item.asking_price != null && (
@@ -695,7 +697,9 @@ export default function InventoryPage() {
                 <p className="text-xs text-muted-foreground">
                   {confirm.card.set_name}{confirm.card.language_code === "JA" && confirm.card.set_name_en ? ` (${confirm.card.set_name_en})` : ""} · #{confirm.card.card_num}
                 </p>
-                {confirm.card.rarity && <p className="text-xs text-muted-foreground">{confirm.card.rarity}</p>}
+                <p className="text-xs text-muted-foreground">
+                  {[confirm.card.rarity, confirm.card.language_code === "JA" ? "Japanese" : "English"].filter(Boolean).join(" · ")}
+                </p>
                 {confirm.confidence != null && (
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {confirm.method ? `${confirm.method} · ` : ""}
