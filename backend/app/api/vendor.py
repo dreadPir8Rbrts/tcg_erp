@@ -8,6 +8,7 @@ Routes:
 """
 
 import uuid
+from datetime import datetime
 from typing import Optional, List
 
 import boto3
@@ -24,6 +25,7 @@ from app.models.profiles import Profile
 from app.models.catalog_v2 import CardV2, ExpansionV2
 from app.schemas.vendor import (
     InventoryItemCreate,
+    InventoryItemPatch,
     InventoryItemResponse,
     InventoryItemWithCardResponse,
 )
@@ -189,6 +191,7 @@ def list_inventory(
             "grade": item.grade,
             "grading_company_other": item.grading_company_other,
             "quantity": item.quantity,
+            "acquired_price": item.acquired_price,
             "asking_price": item.asking_price,
             "is_for_sale": item.is_for_sale,
             "is_for_trade": item.is_for_trade,
@@ -207,6 +210,53 @@ def list_inventory(
         }
         for item, card, expansion in rows
     ]
+
+
+@router.patch("/inventory/{item_id}", response_model=InventoryItemResponse)
+def patch_inventory_item(
+    item_id: str,
+    body: InventoryItemPatch,
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Update mutable fields on an existing inventory item (acquired_price, asking_price, notes)."""
+    item = db.query(Inventory).filter(
+        Inventory.id == item_id,
+        Inventory.profile_id == profile.id,
+        Inventory.deleted_at.is_(None),
+    ).first()
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventory item not found")
+
+    if body.acquired_price is not None:
+        item.acquired_price = body.acquired_price
+    if body.asking_price is not None:
+        item.asking_price = body.asking_price
+    if body.notes is not None:
+        item.notes = body.notes
+
+    item.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return {
+        "id": item.id,
+        "profile_id": item.profile_id,
+        "card_id": item.card_v2_id,
+        "condition_type": item.condition_type,
+        "condition_ungraded": item.condition_ungraded,
+        "grading_company": item.grading_company,
+        "grade": item.grade,
+        "grading_company_other": item.grading_company_other,
+        "quantity": item.quantity,
+        "acquired_price": item.acquired_price,
+        "asking_price": item.asking_price,
+        "is_for_sale": item.is_for_sale,
+        "is_for_trade": item.is_for_trade,
+        "notes": item.notes,
+        "photo_url": item.photo_url,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
 
 
 def _extract_image_url(images: Optional[list]) -> Optional[str]:

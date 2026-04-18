@@ -31,15 +31,15 @@ export function RoleToggle() {
   }
 
   return (
-    <div className="flex items-center rounded-full border border-border p-0.5 gap-0.5">
+    <div className="flex items-center rounded-full border border-primary/40 p-0.5 gap-0.5">
       <button
         onClick={() => handleSwitch("vendor")}
         aria-pressed={activeRole === "vendor"}
         disabled={switching}
         className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
           activeRole === "vendor"
-            ? "bg-foreground text-background"
-            : "text-muted-foreground hover:text-foreground"
+            ? "bg-primary text-white"
+            : "text-white/50 hover:text-white"
         }`}
       >
         Vendor
@@ -50,8 +50,8 @@ export function RoleToggle() {
         disabled={switching}
         className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
           activeRole === "collector"
-            ? "bg-foreground text-background"
-            : "text-muted-foreground hover:text-foreground"
+            ? "bg-primary text-white"
+            : "text-white/50 hover:text-white"
         }`}
       >
         Collector

@@ -89,6 +89,7 @@ class InventoryItemWithCardResponse(BaseModel):
     grade: Optional[str]
     grading_company_other: Optional[str]
     quantity: int
+    acquired_price: Optional[Decimal]
     asking_price: Optional[Decimal]
     is_for_sale: bool
     is_for_trade: bool
@@ -105,3 +106,9 @@ class InventoryItemWithCardResponse(BaseModel):
     language_code: str
 
     model_config = {"from_attributes": True}
+
+
+class InventoryItemPatch(BaseModel):
+    acquired_price: Optional[Decimal] = Field(None, ge=0)
+    asking_price: Optional[Decimal] = Field(None, ge=0)
+    notes: Optional[str] = None

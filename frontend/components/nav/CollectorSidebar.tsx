@@ -32,11 +32,11 @@ function NavLink({ href, label, icon: Icon }: NavLinkProps) {
       href={href}
       className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
         isActive
-          ? "bg-accent text-accent-foreground font-medium"
-          : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+          ? "bg-accent text-white font-medium"
+          : "text-white/70 hover:text-white hover:bg-accent/40"
       }`}
     >
-      <Icon size={16} className="shrink-0" />
+      <Icon size={16} className="shrink-0 text-primary" />
       {label}
     </Link>
   );
@@ -58,7 +58,7 @@ export function CollectorSidebar({ profileId }: CollectorSidebarProps) {
   ];
 
   return (
-    <aside className="w-56 border-r bg-background shrink-0 flex flex-col gap-1 py-4 px-2 overflow-y-auto">
+    <aside className="w-56 border-r border-r-white/10 bg-black shrink-0 flex flex-col gap-1 py-4 px-2 overflow-y-auto">
       {navItems.map((item) => (
         <NavLink key={item.href} {...item} />
       ))}

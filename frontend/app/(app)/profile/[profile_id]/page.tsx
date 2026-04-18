@@ -21,6 +21,7 @@ import {
   type InventoryItemWithCard,
   type CardShow,
 } from "@/lib/api";
+import { PricingPreferencesForm } from "@/components/pricing/PricingPreferencesForm";
 import {
   getProfile,
   getPublicProfile,
@@ -408,6 +409,16 @@ export default function ProfilePage() {
           </div>
         )}
       </div>
+
+      {/* Pricing formula (owner only) */}
+      {isOwner && (
+        <div className="max-w-xl mx-auto px-6 mt-4">
+          <div className="border rounded-lg p-4 space-y-2">
+            <h2 className="text-sm font-semibold">Pricing formula</h2>
+            <PricingPreferencesForm />
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="max-w-2xl mx-auto mt-8 pb-12">

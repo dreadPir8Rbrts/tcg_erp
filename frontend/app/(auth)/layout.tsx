@@ -11,7 +11,9 @@ export default function AuthLayout({
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       <div className="mb-8 text-center">
-        <span className="font-brand text-base tracking-tight">leftovers<span className="text-emerald-500">.gg</span></span>
+        <span className="font-brand text-base flex items-center" style={{ color: '#FFFFFF', fontWeight: 500, letterSpacing: '0.2px' }}>
+          leftovers<span className="text-primary">.gg</span>
+        </span>
       </div>
       {children}
     </div>

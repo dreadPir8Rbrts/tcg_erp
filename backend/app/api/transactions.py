@@ -9,17 +9,26 @@ Routes:
 """
 
 import uuid
-from datetime import date, datetime, timezone
-from typing import List, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.pricing import (
+    _aggregate_prices,
+    _effective_multipliers,
+    _get_or_create_preferences,
+    _is_pricing_fresh,
+    _price_estimate,
+)
 from app.db.session import get_db
 from app.dependencies import get_current_profile
+from app.models.catalog import PriceSnapshot, SoldComp
 from app.models.catalog_v2 import CardV2
 from app.models.inventory import Inventory
+from app.models.pricing_preferences import PricingPreferences
 from app.models.profiles import Profile
 from app.models.transactions import Transaction, TransactionCard
 
@@ -79,6 +88,12 @@ class TransactionCardOut(BaseModel):
     quantity: int
 
 
+class EstimatedAcquiredPrice(BaseModel):
+    inventory_item_id: str
+    card_name: Optional[str]
+    estimated_value: Optional[float]
+
+
 class TransactionOut(BaseModel):
     id: str
     profile_id: str
@@ -94,6 +109,7 @@ class TransactionOut(BaseModel):
     notes: Optional[str] = None
     created_at: datetime
     cards: List[TransactionCardOut] = []
+    estimated_acquired_prices: Optional[List[EstimatedAcquiredPrice]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +178,62 @@ def _build_transaction_out(tx: Transaction, db: Session) -> dict:
         "created_at": tx.created_at,
         "cards": [_build_card_out(tc, card) for tc, card in card_rows],
     }
+
+
+def _estimate_for_card(
+    db: Session,
+    prefs: PricingPreferences,
+    card_v2_id: str,
+    condition_type: str,
+    condition_ungraded: Optional[str],
+    grading_company: Optional[str],
+    grade: Optional[str],
+) -> Optional[float]:
+    """Compute an estimated value for a single inventory card using the user's pricing preferences."""
+    if condition_type == "ungraded" and condition_ungraded:
+        snapshots = (
+            db.query(PriceSnapshot)
+            .filter(
+                PriceSnapshot.card_v2_id == card_v2_id,
+                PriceSnapshot.source == "tcgplayer",
+                PriceSnapshot.market_price.isnot(None),
+            )
+            .order_by(PriceSnapshot.fetched_at.desc())
+            .all()
+        )
+        snapshot = None
+        for preferred in ("holofoil", "normal"):
+            snapshot = next((s for s in snapshots if s.variant == preferred), None)
+            if snapshot:
+                break
+        if snapshot is None and snapshots:
+            snapshot = snapshots[0]
+        if not _is_pricing_fresh(snapshot):
+            return None
+        multipliers = _effective_multipliers(prefs)
+        nm_price = float(snapshot.market_price)
+        return _price_estimate(nm_price, multipliers.get(condition_ungraded, 1.0))
+
+    if condition_type == "graded" and grading_company and grade:
+        sold_cutoff = datetime.utcnow() - timedelta(days=prefs.graded_comp_window_days)
+        comps = (
+            db.query(SoldComp)
+            .filter(
+                SoldComp.card_v2_id == card_v2_id,
+                SoldComp.condition_type == "graded",
+                SoldComp.grading_company == grading_company,
+                SoldComp.grade == grade,
+                SoldComp.sold_date >= sold_cutoff,
+                SoldComp.price.isnot(None),
+            )
+            .order_by(SoldComp.sold_date.desc().nullslast())
+            .all()
+        )
+        if not comps:
+            return None
+        return _aggregate_prices([float(c.price) for c in comps], prefs.graded_aggregation)
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +348,36 @@ def create_transaction(
 
     db.commit()
     db.refresh(tx)
-    return _build_transaction_out(tx, db)
+    out = _build_transaction_out(tx, db)
+
+    # Compute estimated acquired prices for gained cards that link to an inventory item
+    gained_with_item = [c for c in body.cards if c.direction == "gained" and c.inventory_item_id]
+    if gained_with_item:
+        prefs = _get_or_create_preferences(db, profile.id)
+        # Build card name lookup from cards already fetched in _build_transaction_out
+        card_map: Dict[str, Optional[str]] = {}
+        for card_out in out["cards"]:
+            card_map[card_out["inventory_item_id"] or ""] = card_out["card_name"]
+
+        estimates = []
+        for c in gained_with_item:
+            estimated = _estimate_for_card(
+                db,
+                prefs,
+                c.card_v2_id,
+                c.condition_type,
+                c.condition_ungraded,
+                c.grading_company,
+                c.grade,
+            )
+            estimates.append({
+                "inventory_item_id": c.inventory_item_id,
+                "card_name": card_map.get(c.inventory_item_id),
+                "estimated_value": estimated,
+            })
+        out["estimated_acquired_prices"] = estimates
+
+    return out
 
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionOut)

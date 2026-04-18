@@ -19,6 +19,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   createTransaction,
+  patchInventoryItem,
   searchCards,
   quickIdentifyCard,
   MARKETPLACE_OPTIONS,
@@ -26,6 +27,7 @@ import {
   type TransactionDirection,
   type TransactionCardIn,
   type Card,
+  type EstimatedAcquiredPrice,
 } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -385,6 +387,97 @@ function CardPickerModal({
 }
 
 // ---------------------------------------------------------------------------
+// Acquired price confirmation dialog
+// ---------------------------------------------------------------------------
+
+interface AcquiredPriceDraft extends EstimatedAcquiredPrice {
+  editedValue: string;
+  include: boolean;
+}
+
+function AcquiredPriceDialog({
+  items,
+  onConfirm,
+  onSkip,
+}: {
+  items: AcquiredPriceDraft[];
+  onConfirm: (drafts: AcquiredPriceDraft[]) => void;
+  onSkip: () => void;
+}) {
+  const [drafts, setDrafts] = useState<AcquiredPriceDraft[]>(items);
+
+  function toggle(id: string) {
+    setDrafts((prev) => prev.map((d) => d.inventory_item_id === id ? { ...d, include: !d.include } : d));
+  }
+
+  function setValue(id: string, val: string) {
+    setDrafts((prev) => prev.map((d) => d.inventory_item_id === id ? { ...d, editedValue: val } : d));
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="bg-background border rounded-xl shadow-xl p-5 w-full max-w-lg mx-4 flex flex-col gap-4">
+        <div>
+          <h2 className="text-sm font-semibold">Set acquired price?</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Set the cost basis for cards you gained. Uncheck any you want to skip.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
+          {drafts.map((d) => (
+            <div key={d.inventory_item_id} className="flex items-center gap-3 py-1">
+              <input
+                type="checkbox"
+                id={`ap-${d.inventory_item_id}`}
+                checked={d.include}
+                onChange={() => toggle(d.inventory_item_id)}
+                className="h-4 w-4 shrink-0"
+              />
+              <label
+                htmlFor={`ap-${d.inventory_item_id}`}
+                className="flex-1 min-w-0 text-sm truncate cursor-pointer"
+              >
+                {d.card_name ?? "Card"}
+              </label>
+              <div className="relative shrink-0">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={d.editedValue}
+                  onChange={(e) => setValue(d.inventory_item_id, e.target.value)}
+                  disabled={!d.include}
+                  className="border rounded px-2 pl-5 py-1 text-xs bg-background w-24 disabled:opacity-40"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => onConfirm(drafts)}
+            className="px-4 py-2 text-sm font-medium rounded-md bg-foreground text-background hover:bg-foreground/80 transition-colors"
+          >
+            Confirm
+          </button>
+          <button
+            type="button"
+            onClick={onSkip}
+            className="px-4 py-2 text-sm rounded-md border hover:bg-muted transition-colors"
+          >
+            Skip
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Computed value display
 // ---------------------------------------------------------------------------
 
@@ -426,6 +519,8 @@ export default function NewTransactionPage() {
   const [pickerDirection, setPickerDirection] = useState<TransactionDirection | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [acquiredPriceDrafts, setAcquiredPriceDrafts] = useState<AcquiredPriceDraft[] | null>(null);
+  const [savedTxProfileId, setSavedTxProfileId] = useState<string | null>(null);
 
   // Derived
   const autoValue = computeValue(cashGained, cashLost, cards);
@@ -483,7 +578,7 @@ export default function NewTransactionPage() {
         quantity: c.quantity,
       }));
 
-      await createTransaction({
+      const result = await createTransaction({
         transaction_type: txType,
         transaction_date: txDate,
         marketplace: marketplace || undefined,
@@ -494,12 +589,42 @@ export default function NewTransactionPage() {
         notes: notes || undefined,
         cards: cardPayload,
       });
-      router.push(`/transactions/${params.profile_id}`);
+
+      const estimates = result.estimated_acquired_prices;
+      if (estimates && estimates.length > 0) {
+        // Prompt user to confirm acquired prices before navigating away
+        setSavedTxProfileId(params.profile_id);
+        setAcquiredPriceDrafts(
+          estimates.map((e) => ({
+            ...e,
+            editedValue: e.estimated_value != null ? String(e.estimated_value) : "",
+            include: true,
+          }))
+        );
+      } else {
+        router.push(`/transactions/${params.profile_id}`);
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Failed to save transaction.");
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleAcquiredPriceConfirm(drafts: AcquiredPriceDraft[]) {
+    const included = drafts.filter((d) => d.include && d.editedValue);
+    await Promise.all(
+      included.map((d) =>
+        patchInventoryItem(d.inventory_item_id, {
+          acquired_price: parseFloat(d.editedValue) || undefined,
+        }).catch(() => { /* best-effort */ })
+      )
+    );
+    router.push(`/transactions/${savedTxProfileId ?? params.profile_id}`);
+  }
+
+  function handleAcquiredPriceSkip() {
+    router.push(`/transactions/${savedTxProfileId ?? params.profile_id}`);
   }
 
   return (
@@ -675,6 +800,15 @@ export default function NewTransactionPage() {
           direction={pickerDirection}
           onSelect={addCard}
           onClose={() => setPickerDirection(null)}
+        />
+      )}
+
+      {/* Acquired price confirmation dialog */}
+      {acquiredPriceDrafts && (
+        <AcquiredPriceDialog
+          items={acquiredPriceDrafts}
+          onConfirm={handleAcquiredPriceConfirm}
+          onSkip={handleAcquiredPriceSkip}
         />
       )}
     </div>

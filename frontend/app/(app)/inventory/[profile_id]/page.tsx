@@ -26,6 +26,7 @@ import {
   type InventoryItemWithCard,
   type SoldCompsParams,
 } from "@/lib/api";
+import { patchInventoryItem } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2 } from "lucide-react";
@@ -153,6 +154,9 @@ function InventoryRow({ item }: { item: InventoryItemWithCard }) {
         {item.asking_price != null && (
           <p className="text-sm font-medium">${Number(item.asking_price).toFixed(2)}</p>
         )}
+        {item.acquired_price != null && (
+          <p className="text-xs text-muted-foreground">cost ${Number(item.acquired_price).toFixed(2)}</p>
+        )}
         <div className="flex gap-1 mt-1 justify-end">
           {item.is_for_sale && <span className="text-xs text-muted-foreground">Sale</span>}
           {item.is_for_trade && <span className="text-xs text-muted-foreground">Trade</span>}
@@ -200,6 +204,7 @@ export default function InventoryPage() {
   const [gradingCompany, setGradingCompany] = useState("psa");
   const [grade, setGrade] = useState("");
   const [gradingCompanyOther, setGradingCompanyOther] = useState("");
+  const [acquiredPrice, setAcquiredPrice] = useState("");
   const [askingPrice, setAskingPrice] = useState("");
   const [isForSale, setIsForSale] = useState(true);
   const [isForTrade, setIsForTrade] = useState(false);
@@ -297,6 +302,7 @@ export default function InventoryPage() {
     setGradingCompany("psa");
     setGrade("");
     setGradingCompanyOther("");
+    setAcquiredPrice("");
     setAskingPrice("");
     setIsForSale(true);
     setIsForTrade(false);
@@ -463,6 +469,7 @@ export default function InventoryPage() {
               grade,
               ...(gradingCompany === "other" ? { grading_company_other: gradingCompanyOther } : {}),
             }),
+        acquired_price: acquiredPrice || undefined,
         asking_price: askingPrice || undefined,
         is_for_sale: isForSale,
         is_for_trade: isForTrade,
@@ -828,31 +835,48 @@ export default function InventoryPage() {
             </div>
 
             {/* Price + quantity */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3">
               <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Asking price</label>
+                <label className="text-xs text-muted-foreground">Acquired price (optional)</label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    value={askingPrice}
-                    onChange={(e) => setAskingPrice(e.target.value)}
+                    value={acquiredPrice}
+                    onChange={(e) => setAcquiredPrice(e.target.value)}
                     placeholder="0.00"
                     className="w-full border rounded-md pl-6 pr-3 py-2 text-sm bg-background"
                   />
                 </div>
               </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Quantity</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 text-sm bg-background"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Asking price</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={askingPrice}
+                      onChange={(e) => setAskingPrice(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full border rounded-md pl-6 pr-3 py-2 text-sm bg-background"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Quantity</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    className="w-full border rounded-md px-3 py-2 text-sm bg-background"
+                  />
+                </div>
               </div>
             </div>
 

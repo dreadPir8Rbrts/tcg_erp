@@ -43,10 +43,17 @@ export interface InventoryItemCreate {
   grading_company?: string;
   grade?: string;
   grading_company_other?: string;
+  acquired_price?: string;
   asking_price?: string;
   is_for_sale: boolean;
   is_for_trade: boolean;
   quantity: number;
+  notes?: string;
+}
+
+export interface InventoryItemPatch {
+  acquired_price?: number;
+  asking_price?: number;
   notes?: string;
 }
 
@@ -181,6 +188,7 @@ export interface InventoryItemWithCard {
   grade?: string;
   grading_company_other?: string;
   quantity: number;
+  acquired_price?: number;
   asking_price?: number;
   is_for_sale: boolean;
   is_for_trade: boolean;
@@ -214,6 +222,16 @@ export async function addInventoryItem(item: InventoryItemCreate): Promise<void>
     body: JSON.stringify(item),
   });
   if (!res.ok) throw new Error(`Failed to add inventory: ${res.status}`);
+}
+
+// Update mutable fields on an existing inventory item
+export async function patchInventoryItem(itemId: string, patch: InventoryItemPatch): Promise<void> {
+  const res = await fetch(`${API_URL}/api/v1/inventory/${itemId}`, {
+    method: "PATCH",
+    headers: await authHeaders(),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Failed to update inventory item: ${res.status}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +495,12 @@ export interface TransactionCardOut {
   quantity: number;
 }
 
+export interface EstimatedAcquiredPrice {
+  inventory_item_id: string;
+  card_name: string | null;
+  estimated_value: number | null;
+}
+
 export interface TransactionOut {
   id: string;
   profile_id: string;
@@ -492,6 +516,7 @@ export interface TransactionOut {
   notes?: string | null;
   created_at: string;
   cards: TransactionCardOut[];
+  estimated_acquired_prices?: EstimatedAcquiredPrice[] | null;
 }
 
 export async function getTransactions(params: { limit?: number; offset?: number } = {}): Promise<TransactionOut[]> {
@@ -623,6 +648,68 @@ export async function getSoldComps(
   });
   if (!res.ok) throw new Error(`Failed to load sold comps: ${res.status}`);
   const data: SoldCompsResponse = await res.json();
+  return { http_status: res.status, data };
+}
+
+// ---------------------------------------------------------------------------
+// Pricing preferences
+// ---------------------------------------------------------------------------
+
+export interface PricingPreferences {
+  lp_multiplier: number;
+  mp_multiplier: number;
+  hp_multiplier: number;
+  dmg_multiplier: number;
+  graded_comp_window_days: 7 | 14 | 30;
+  graded_aggregation: "median" | "average" | "most_recent";
+}
+
+export async function getMyPricingPreferences(): Promise<PricingPreferences> {
+  const res = await fetch(`${API_URL}/api/v1/pricing/preferences`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to load pricing preferences: ${res.status}`);
+  return res.json();
+}
+
+export async function updateMyPricingPreferences(
+  patch: Partial<PricingPreferences>
+): Promise<PricingPreferences> {
+  const res = await fetch(`${API_URL}/api/v1/pricing/preferences`, {
+    method: "PUT",
+    headers: await authHeaders(),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Failed to update pricing preferences: ${res.status}`);
+  return res.json();
+}
+
+export interface EstimatedValueResponse {
+  card_v2_id: string;
+  status: "ready" | "pending";
+  estimated_value?: number;
+  basis?: string;
+  data_points?: number;
+  window_days?: number | null;
+}
+
+export async function getCardEstimatedValue(
+  cardV2Id: string,
+  params: {
+    condition_type: "ungraded" | "graded";
+    condition_ungraded?: string;
+    grading_company?: string;
+    grade?: string;
+  }
+): Promise<{ http_status: number; data: EstimatedValueResponse }> {
+  const qs = new URLSearchParams({ condition_type: params.condition_type });
+  if (params.condition_ungraded) qs.set("condition_ungraded", params.condition_ungraded);
+  if (params.grading_company) qs.set("grading_company", params.grading_company);
+  if (params.grade) qs.set("grade", params.grade);
+  const res = await fetch(`${API_URL}/api/v1/cards/${cardV2Id}/estimated-value?${qs}`, {
+    headers: await authHeaders(),
+  });
+  const data: EstimatedValueResponse = await res.json();
   return { http_status: res.status, data };
 }
 

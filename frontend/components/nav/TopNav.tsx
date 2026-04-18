@@ -16,9 +16,9 @@ interface TopNavProps {
 
 export function TopNav({ profile }: TopNavProps) {
   return (
-    <header className="h-14 border-b bg-card flex items-center px-4 gap-4 sticky top-0 z-50 shrink-0">
-      <Link href="/" className="font-brand text-sm tracking-tight text-foreground">
-        leftovers<span className="text-emerald-500">.gg</span>
+    <header className="h-14 border-b border-b-black/10 flex items-center px-4 gap-4 sticky top-0 z-50 shrink-0" style={{ backgroundColor: '#000000' }}>
+      <Link href="/" className="font-brand text-sm flex items-center" style={{ color: '#FFFFFF', fontWeight: 500, letterSpacing: '0.2px' }}>
+        leftovers<span className="text-primary">.gg</span>
       </Link>
       <div className="flex-1" />
       {profile && <RoleToggle />}
