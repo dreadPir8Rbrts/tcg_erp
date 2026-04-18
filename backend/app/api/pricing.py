@@ -26,7 +26,10 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
+from urllib.parse import urlencode
+
 from app.models.catalog import PriceSnapshot, SoldComp
+from app.models.catalog_v2 import CardV2, ExpansionV2
 from app.models.excluded_sold_comps import ExcludedSoldComp
 from app.models.pricing_preferences import PricingPreferences
 from app.models.profiles import Profile
@@ -177,6 +180,44 @@ def _sold_comp_response(comp: SoldComp) -> Dict[str, Any]:
         "sale_type": comp.sale_type,
         "fetched_at": comp.fetched_at.isoformat(),
     }
+
+
+def _build_ebay_search_url(
+    db: Session,
+    card_v2_id: uuid.UUID,
+    grading_company: Optional[str],
+    grade: Optional[str],
+) -> Optional[str]:
+    """Reconstruct the eBay search URL that would be (or was) used to scrape this card.
+
+    Mirrors the logic in card-ops-droplet/app/services/ebay.py::_build_search_url and
+    card-ops-droplet/app/tasks/on_demand.py::_get_card_info.
+    """
+    card = db.query(CardV2).filter(CardV2.id == card_v2_id).first()
+    if card is None:
+        return None
+
+    expansion = db.query(ExpansionV2).filter(ExpansionV2.id == card.expansion_id).first()
+
+    # Use English names for eBay queries (same logic as on_demand.py)
+    card_name = card.en_name or card.name
+    set_name = (expansion.translation or expansion.name) if expansion else ""
+    card_number = card.printed_number or card.number
+
+    parts = [p for p in [card_name, card_number, set_name, grading_company, grade] if p]
+    query = " ".join(parts)
+    graded_yn = "Yes" if (grading_company and grade) else "No"
+    params = {
+        "_nkw":     query,
+        "_sacat":   "0",
+        "_from":    "R40",
+        "Language": card.language,
+        "Graded":   graded_yn,
+        "_dcat":    "183454",
+        "rt":       "nc",
+        "LH_Sold":  "1",
+    }
+    return "https://www.ebay.com/sch/i.html?" + urlencode(params)
 
 
 def _aggregate_prices(
@@ -603,10 +644,13 @@ def get_card_sold_comps(
         .all()
     }
 
+    ebay_url = _build_ebay_search_url(db, card_v2_id, grading_company, grade)
+
     return {
         "card_v2_id": str(card_v2_id),
         "status": "ready",
         "total": len(comps),
+        "ebay_search_url": ebay_url,
         "comps": [
             {**_sold_comp_response(c), "excluded": c.id in excluded_ids}
             for c in comps

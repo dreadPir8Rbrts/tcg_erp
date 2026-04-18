@@ -611,6 +611,7 @@ export interface SoldComp {
 export interface SoldCompsResponse {
   card_v2_id: string;
   total: number;
+  ebay_search_url: string | null;
   comps: SoldComp[];
 }
 

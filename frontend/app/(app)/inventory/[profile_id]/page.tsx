@@ -29,6 +29,7 @@ import {
   type InventoryItemWithCard,
   type SoldCompsParams,
   type SoldComp,
+  type SoldCompsResponse,
   type PricingPreferences,
   type GradedAggregation,
   type CompWindowDays,
@@ -231,7 +232,7 @@ export default function InventoryPage() {
   const [compsConditionUngraded, setCompsConditionUngraded] = useState("nm");
   const [compsGradingCompany, setCompsGradingCompany] = useState("psa");
   const [compsGrade, setCompsGrade] = useState("");
-  const [compsResult, setCompsResult] = useState<{ total: number; comps: SoldComp[] } | null>(null);
+  const [compsResult, setCompsResult] = useState<SoldCompsResponse | null>(null);
   const [compsLoading, setCompsLoading] = useState(false);
   const [compsError, setCompsError] = useState<string | null>(null);
 
@@ -1330,6 +1331,20 @@ export default function InventoryPage() {
                 </div>
               )}
             </div>
+              {/* ---- eBay search URL debug ---- */}
+              {compsResult?.ebay_search_url && (
+                <div className="mt-2 pt-2 border-t border-border/50">
+                  <p className="text-xs text-muted-foreground mb-1 font-medium">eBay search URL</p>
+                  <a
+                    href={compsResult.ebay_search_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-primary hover:underline break-all"
+                  >
+                    {compsResult.ebay_search_url}
+                  </a>
+                </div>
+              )}
             {/* ---- end sold comps ---- */}
 
             {addError && <p className="text-xs text-destructive">{addError}</p>}
