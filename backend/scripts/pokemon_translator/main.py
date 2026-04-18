@@ -63,7 +63,7 @@ def _process_db(dry_run: bool, limit: Optional[int], no_fallback: bool) -> None:
         stats = {"map": 0, "claude": 0, "trainer_map": 0, "passthrough": 0, "unresolved": 0}
         batch: list = []
 
-        for card, expansion in rows:
+        for i, (card, expansion) in enumerate(rows):
             parsed = parse_card_name(card.name, card.supertype)
             translated = translate_card(
                 parsed,
@@ -82,6 +82,8 @@ def _process_db(dry_run: bool, limit: Optional[int], no_fallback: bool) -> None:
                 if en_name:
                     card.en_name = en_name
                     batch.append(card)
+                if (i + 1) % 500 == 0:
+                    print(f"  {i + 1}/{len(rows)} processed (claude={stats.get('claude', 0)} unresolved={stats.get('unresolved', 0)})", flush=True)
 
             if not dry_run and len(batch) >= 100:
                 db.commit()
