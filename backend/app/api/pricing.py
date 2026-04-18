@@ -16,6 +16,7 @@ On-demand scraping:
 import logging
 import uuid
 from datetime import datetime, timedelta
+import math
 from statistics import median, mean, quantiles
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
 from app.models.catalog import PriceSnapshot, SoldComp
+from app.models.excluded_sold_comps import ExcludedSoldComp
 from app.models.pricing_preferences import PricingPreferences
 from app.models.profiles import Profile
 
@@ -177,36 +179,69 @@ def _sold_comp_response(comp: SoldComp) -> Dict[str, Any]:
     }
 
 
-def _remove_outliers(prices: List[float]) -> List[float]:
-    """Remove clear outliers using IQR × 2.0 fencing.
+def _aggregate_prices(
+    prices: List[float],
+    method: str,
+    iqr_multiplier: float = 2.0,
+    halflife_days: int = 30,
+    trim_pct: float = 10.0,
+    days_ago: Optional[List[float]] = None,
+) -> float:
+    """Aggregate a list of prices using the chosen method.
 
-    Only applied when there are at least 5 prices. If fencing would leave
-    fewer than 3 prices the original list is returned unchanged — a wide
-    spread on a small sample is more likely legitimate variance than noise.
+    No automatic outlier removal — that is explicit via the median_iqr method.
+
+    Args:
+        prices:        Sale prices, ordered date-descending (most recent first).
+        method:        One of median / median_iqr / weighted_recency / trimmed_mean.
+        iqr_multiplier: Fence width multiplier for median_iqr (default 2.0).
+        halflife_days:  Half-life in days for weighted_recency (default 30).
+        trim_pct:       Percent to trim from each end for trimmed_mean (default 10).
+        days_ago:       Parallel list of how many days ago each sale occurred,
+                        required for weighted_recency; same order as prices.
     """
-    if len(prices) < 5:
-        return prices
-    q1, _, q3 = quantiles(prices, n=4)
-    iqr = q3 - q1
-    lo = q1 - 2.0 * iqr
-    hi = q3 + 2.0 * iqr
-    filtered = [p for p in prices if lo <= p <= hi]
-    return filtered if len(filtered) >= 3 else prices
+    if not prices:
+        return 0.0
 
+    if method == "median_iqr":
+        if len(prices) >= 5:
+            q1, _, q3 = quantiles(prices, n=4)
+            iqr = q3 - q1
+            lo = q1 - iqr_multiplier * iqr
+            hi = q3 + iqr_multiplier * iqr
+            filtered = [p for p in prices if lo <= p <= hi]
+            if len(filtered) >= 3:
+                prices = filtered
+        return round(median(prices), 2)
 
-def _aggregate_prices(prices: List[float], method: str) -> float:
-    """Remove outliers then apply the user's aggregation method to a list of prices."""
-    prices = _remove_outliers(prices)
-    if method == "most_recent":
-        return round(prices[0], 2)   # caller passes prices sorted date-desc
-    if method == "average":
-        return round(mean(prices), 2)
-    return round(median(prices), 2)  # default: median
+    if method == "weighted_recency":
+        lam = math.log(2) / max(halflife_days, 1)
+        ages = days_ago if days_ago and len(days_ago) == len(prices) else [0.0] * len(prices)
+        weights = [math.exp(-lam * d) for d in ages]
+        total_w = sum(weights)
+        if total_w == 0:
+            return round(median(prices), 2)
+        return round(sum(p * w for p, w in zip(prices, weights)) / total_w, 2)
+
+    if method == "trimmed_mean":
+        n = len(prices)
+        cut = max(1, round(n * trim_pct / 100)) if n >= 4 else 0
+        trimmed = sorted(prices)[cut: n - cut] if cut else prices
+        if not trimmed:
+            trimmed = prices
+        return round(mean(trimmed), 2)
+
+    # default: median
+    return round(median(prices), 2)
 
 
 # ---------------------------------------------------------------------------
 # Preferences endpoints
 # ---------------------------------------------------------------------------
+
+VALID_WINDOW_DAYS = {7, 14, 30, 60, 90}
+VALID_AGGREGATIONS = {"median", "median_iqr", "weighted_recency", "trimmed_mean"}
+
 
 class PricingPreferencesResponse(BaseModel):
     lp_multiplier: float
@@ -215,6 +250,9 @@ class PricingPreferencesResponse(BaseModel):
     dmg_multiplier: float
     graded_comp_window_days: int
     graded_aggregation: str
+    graded_iqr_multiplier: float
+    graded_recency_halflife_days: int
+    graded_trim_pct: float
 
 
 class PricingPreferencesUpdate(BaseModel):
@@ -222,23 +260,25 @@ class PricingPreferencesUpdate(BaseModel):
     mp_multiplier: Optional[float] = Field(None, ge=0, le=1)
     hp_multiplier: Optional[float] = Field(None, ge=0, le=1)
     dmg_multiplier: Optional[float] = Field(None, ge=0, le=1)
-    graded_comp_window_days: Optional[int] = Field(None)
+    graded_comp_window_days: Optional[int] = None
     graded_aggregation: Optional[str] = None
+    graded_iqr_multiplier: Optional[float] = Field(None, ge=0.5, le=5.0)
+    graded_recency_halflife_days: Optional[int] = Field(None, ge=1, le=90)
+    graded_trim_pct: Optional[float] = Field(None, ge=1, le=49)
 
-    def validate_window(self) -> None:
-        if self.graded_comp_window_days is not None and self.graded_comp_window_days not in (7, 14, 30):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="graded_comp_window_days must be 7, 14, or 30",
-            )
 
-    def validate_aggregation(self) -> None:
-        valid = {"median", "average", "most_recent"}
-        if self.graded_aggregation is not None and self.graded_aggregation not in valid:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"graded_aggregation must be one of {sorted(valid)}",
-            )
+def _prefs_to_response(prefs: PricingPreferences) -> PricingPreferencesResponse:
+    return PricingPreferencesResponse(
+        lp_multiplier=float(prefs.lp_multiplier),
+        mp_multiplier=float(prefs.mp_multiplier),
+        hp_multiplier=float(prefs.hp_multiplier),
+        dmg_multiplier=float(prefs.dmg_multiplier),
+        graded_comp_window_days=prefs.graded_comp_window_days,
+        graded_aggregation=prefs.graded_aggregation,
+        graded_iqr_multiplier=float(prefs.graded_iqr_multiplier),
+        graded_recency_halflife_days=prefs.graded_recency_halflife_days,
+        graded_trim_pct=float(prefs.graded_trim_pct),
+    )
 
 
 @router.get("/pricing/preferences", response_model=PricingPreferencesResponse)
@@ -247,15 +287,7 @@ def get_pricing_preferences(
     db: Session = Depends(get_db),
 ) -> PricingPreferencesResponse:
     """Return current user's pricing formula settings, creating defaults on first access."""
-    prefs = _get_or_create_preferences(db, profile.id)
-    return PricingPreferencesResponse(
-        lp_multiplier=float(prefs.lp_multiplier),
-        mp_multiplier=float(prefs.mp_multiplier),
-        hp_multiplier=float(prefs.hp_multiplier),
-        dmg_multiplier=float(prefs.dmg_multiplier),
-        graded_comp_window_days=prefs.graded_comp_window_days,
-        graded_aggregation=prefs.graded_aggregation,
-    )
+    return _prefs_to_response(_get_or_create_preferences(db, profile.id))
 
 
 @router.put("/pricing/preferences", response_model=PricingPreferencesResponse)
@@ -265,36 +297,32 @@ def update_pricing_preferences(
     db: Session = Depends(get_db),
 ) -> PricingPreferencesResponse:
     """Upsert current user's pricing formula settings. Only provided fields are updated."""
-    body.validate_window()
-    body.validate_aggregation()
+    if body.graded_comp_window_days is not None and body.graded_comp_window_days not in VALID_WINDOW_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"graded_comp_window_days must be one of {sorted(VALID_WINDOW_DAYS)}",
+        )
+    if body.graded_aggregation is not None and body.graded_aggregation not in VALID_AGGREGATIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"graded_aggregation must be one of {sorted(VALID_AGGREGATIONS)}",
+        )
 
     prefs = _get_or_create_preferences(db, profile.id)
 
-    if body.lp_multiplier is not None:
-        prefs.lp_multiplier = body.lp_multiplier
-    if body.mp_multiplier is not None:
-        prefs.mp_multiplier = body.mp_multiplier
-    if body.hp_multiplier is not None:
-        prefs.hp_multiplier = body.hp_multiplier
-    if body.dmg_multiplier is not None:
-        prefs.dmg_multiplier = body.dmg_multiplier
-    if body.graded_comp_window_days is not None:
-        prefs.graded_comp_window_days = body.graded_comp_window_days
-    if body.graded_aggregation is not None:
-        prefs.graded_aggregation = body.graded_aggregation
+    for field in (
+        "lp_multiplier", "mp_multiplier", "hp_multiplier", "dmg_multiplier",
+        "graded_comp_window_days", "graded_aggregation",
+        "graded_iqr_multiplier", "graded_recency_halflife_days", "graded_trim_pct",
+    ):
+        val = getattr(body, field)
+        if val is not None:
+            setattr(prefs, field, val)
 
     prefs.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(prefs)
-
-    return PricingPreferencesResponse(
-        lp_multiplier=float(prefs.lp_multiplier),
-        mp_multiplier=float(prefs.mp_multiplier),
-        hp_multiplier=float(prefs.hp_multiplier),
-        dmg_multiplier=float(prefs.dmg_multiplier),
-        graded_comp_window_days=prefs.graded_comp_window_days,
-        graded_aggregation=prefs.graded_aggregation,
-    )
+    return _prefs_to_response(prefs)
 
 
 # ---------------------------------------------------------------------------
@@ -442,9 +470,7 @@ def get_card_estimated_value(
 
     window_days = prefs.graded_comp_window_days
     sold_cutoff = datetime.utcnow() - timedelta(days=window_days)
-    # Use a fixed 30-day fetched_at window to check whether we have cached data at all;
-    # the sold_date filter then narrows to the user's preferred window for aggregation.
-    fetch_cutoff = datetime.utcnow() - timedelta(days=30)
+    fetch_cutoff = datetime.utcnow() - timedelta(days=90)
 
     cache_check = (
         db.query(SoldComp)
@@ -462,6 +488,15 @@ def get_card_estimated_value(
         response.status_code = status.HTTP_202_ACCEPTED
         return {"card_v2_id": str(card_v2_id), "status": "pending"}
 
+    # Fetch excluded comp IDs for this user so they are skipped in the estimate
+    excluded_ids = {
+        row.sold_comp_id
+        for row in db.query(ExcludedSoldComp)
+        .filter(ExcludedSoldComp.profile_id == profile.id)
+        .all()
+    }
+
+    now = datetime.utcnow()
     comps = (
         db.query(SoldComp)
         .filter(
@@ -475,9 +510,9 @@ def get_card_estimated_value(
         .order_by(SoldComp.sold_date.desc().nullslast())
         .all()
     )
+    comps = [c for c in comps if c.id not in excluded_ids]
 
     if not comps:
-        # Cache exists but no sales within the user's window — return empty rather than pending
         return {
             "card_v2_id": str(card_v2_id),
             "status": "ready",
@@ -488,7 +523,18 @@ def get_card_estimated_value(
         }
 
     prices = [float(c.price) for c in comps]
-    estimated = _aggregate_prices(prices, prefs.graded_aggregation)
+    days_ago = [
+        (now - c.sold_date).days if c.sold_date else 0.0
+        for c in comps
+    ]
+    estimated = _aggregate_prices(
+        prices,
+        prefs.graded_aggregation,
+        iqr_multiplier=float(prefs.graded_iqr_multiplier),
+        halflife_days=prefs.graded_recency_halflife_days,
+        trim_pct=float(prefs.graded_trim_pct),
+        days_ago=days_ago,
+    )
 
     return {
         "card_v2_id": str(card_v2_id),
@@ -508,29 +554,33 @@ def get_card_sold_comps(
     grading_company: Optional[str] = Query(None),
     grade: Optional[str] = Query(None),
     condition_ungraded: Optional[str] = Query(None),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(200, ge=1, le=500),
+    profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Return recent eBay sold comps for a card with optional condition filters.
+    """Return eBay sold comps for a card (up to 90 days) with optional condition filters.
 
-    Returns 200 with comps data when fresh data exists.
-    Returns 202 with { "status": "pending" } when no fresh data exists.
+    Each comp includes an `excluded` flag indicating whether the current user
+    has excluded it from their price estimation.
+
+    Returns 200 with comps data when cached data exists.
+    Returns 202 with { "status": "pending" } when no data is cached yet.
     """
-    cutoff = datetime.utcnow() - timedelta(days=COMPS_FRESHNESS_DAYS)
-    freshness_query = db.query(SoldComp).filter(
+    fetch_cutoff = datetime.utcnow() - timedelta(days=90)
+    base_query = db.query(SoldComp).filter(
         SoldComp.card_v2_id == card_v2_id,
-        SoldComp.fetched_at >= cutoff,
+        SoldComp.fetched_at >= fetch_cutoff,
     )
     if condition_type is not None:
-        freshness_query = freshness_query.filter(SoldComp.condition_type == condition_type)
+        base_query = base_query.filter(SoldComp.condition_type == condition_type)
     if grading_company is not None:
-        freshness_query = freshness_query.filter(SoldComp.grading_company == grading_company)
+        base_query = base_query.filter(SoldComp.grading_company == grading_company)
     if grade is not None:
-        freshness_query = freshness_query.filter(SoldComp.grade == grade)
+        base_query = base_query.filter(SoldComp.grade == grade)
     if condition_ungraded is not None:
-        freshness_query = freshness_query.filter(SoldComp.condition_ungraded == condition_ungraded)
+        base_query = base_query.filter(SoldComp.condition_ungraded == condition_ungraded)
 
-    if freshness_query.first() is None:
+    if base_query.first() is None:
         _enqueue_ebay_on_demand(card_v2_id, grading_company, grade, condition_type)
         response.status_code = status.HTTP_202_ACCEPTED
         return {
@@ -540,15 +590,60 @@ def get_card_sold_comps(
         }
 
     comps = (
-        freshness_query
+        base_query
         .order_by(SoldComp.sold_date.desc().nullslast())
         .limit(limit)
         .all()
     )
 
+    excluded_ids = {
+        row.sold_comp_id
+        for row in db.query(ExcludedSoldComp)
+        .filter(ExcludedSoldComp.profile_id == profile.id)
+        .all()
+    }
+
     return {
         "card_v2_id": str(card_v2_id),
         "status": "ready",
         "total": len(comps),
-        "comps": [_sold_comp_response(c) for c in comps],
+        "comps": [
+            {**_sold_comp_response(c), "excluded": c.id in excluded_ids}
+            for c in comps
+        ],
     }
+
+
+@router.post("/sold-comps/{comp_id}/exclude", status_code=status.HTTP_204_NO_CONTENT)
+def exclude_sold_comp(
+    comp_id: str,
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> None:
+    """Mark a sold comp as excluded from this user's price estimation."""
+    comp = db.query(SoldComp).filter(SoldComp.id == comp_id).first()
+    if comp is None:
+        raise HTTPException(status_code=404, detail="Sold comp not found")
+    existing = db.query(ExcludedSoldComp).filter(
+        ExcludedSoldComp.profile_id == profile.id,
+        ExcludedSoldComp.sold_comp_id == comp_id,
+    ).first()
+    if existing is None:
+        db.add(ExcludedSoldComp(profile_id=profile.id, sold_comp_id=comp_id))
+        db.commit()
+
+
+@router.delete("/sold-comps/{comp_id}/exclude", status_code=status.HTTP_204_NO_CONTENT)
+def unexclude_sold_comp(
+    comp_id: str,
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove a sold comp exclusion, restoring it to price estimation."""
+    row = db.query(ExcludedSoldComp).filter(
+        ExcludedSoldComp.profile_id == profile.id,
+        ExcludedSoldComp.sold_comp_id == comp_id,
+    ).first()
+    if row:
+        db.delete(row)
+        db.commit()

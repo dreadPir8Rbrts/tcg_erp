@@ -28,14 +28,17 @@ const MULTIPLIER_FIELDS: Array<{
 
 const AGGREGATION_OPTIONS: Array<{ value: PricingPreferences["graded_aggregation"]; label: string }> = [
   { value: "median", label: "Median" },
-  { value: "average", label: "Average (mean)" },
-  { value: "most_recent", label: "Most recent sale" },
+  { value: "median_iqr", label: "Median + IQR" },
+  { value: "weighted_recency", label: "Weighted Recency" },
+  { value: "trimmed_mean", label: "Trimmed Mean" },
 ];
 
 const WINDOW_OPTIONS: Array<{ value: PricingPreferences["graded_comp_window_days"]; label: string }> = [
   { value: 7, label: "7 days" },
   { value: 14, label: "14 days" },
   { value: 30, label: "30 days" },
+  { value: 60, label: "60 days" },
+  { value: 90, label: "90 days" },
 ];
 
 export function PricingPreferencesForm() {

@@ -605,6 +605,7 @@ export interface SoldComp {
   grading_company_other: string | null;
   sale_type: string | null;
   fetched_at: string;
+  excluded: boolean;
 }
 
 export interface SoldCompsResponse {
@@ -651,17 +652,39 @@ export async function getSoldComps(
   return { http_status: res.status, data };
 }
 
+export async function excludeSoldComp(compId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/v1/sold-comps/${compId}/exclude`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to exclude comp: ${res.status}`);
+}
+
+export async function unexcludeSoldComp(compId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/v1/sold-comps/${compId}/exclude`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to unexclude comp: ${res.status}`);
+}
+
 // ---------------------------------------------------------------------------
 // Pricing preferences
 // ---------------------------------------------------------------------------
+
+export type GradedAggregation = "median" | "median_iqr" | "weighted_recency" | "trimmed_mean";
+export type CompWindowDays = 7 | 14 | 30 | 60 | 90;
 
 export interface PricingPreferences {
   lp_multiplier: number;
   mp_multiplier: number;
   hp_multiplier: number;
   dmg_multiplier: number;
-  graded_comp_window_days: 7 | 14 | 30;
-  graded_aggregation: "median" | "average" | "most_recent";
+  graded_comp_window_days: CompWindowDays;
+  graded_aggregation: GradedAggregation;
+  graded_iqr_multiplier: number;
+  graded_recency_halflife_days: number;
+  graded_trim_pct: number;
 }
 
 export async function getMyPricingPreferences(): Promise<PricingPreferences> {
