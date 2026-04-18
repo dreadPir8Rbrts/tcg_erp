@@ -143,6 +143,7 @@ function InventoryRow({ item }: { item: InventoryItemWithCard }) {
         <div className="flex items-center gap-2 mt-1">
           <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
           {item.rarity && <span className="text-xs text-muted-foreground">{item.rarity}</span>}
+          <span className="text-xs text-muted-foreground">{item.language_code === "JA" ? "Japanese" : "English"}</span>
         </div>
       </div>
       <div className="text-right flex-shrink-0">
