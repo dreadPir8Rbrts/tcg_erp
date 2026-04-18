@@ -51,9 +51,11 @@ class CardDetailResponse(BaseModel):
     id: str
     card_num: Optional[str] = None
     name: str
+    en_name: Optional[str] = None
     rarity: Optional[str] = None
     image_url: Optional[str] = None
     set_name: str
+    set_name_en: Optional[str] = None
     release_date: Optional[str] = None
     series_name: Optional[str] = None   # None for One Piece
     game: str
@@ -82,9 +84,11 @@ def _build_card_response(card: CardV2, expansion: ExpansionV2) -> dict:
         "id": str(card.id),
         "card_num": card.number,
         "name": card.name,
+        "en_name": card.en_name,
         "rarity": card.rarity,
         "image_url": _extract_image_url(card.images),
         "set_name": expansion.name,
+        "set_name_en": expansion.translation,
         "release_date": str(expansion.release_date) if expansion.release_date else None,
         "series_name": expansion.series,
         "game": card.game,

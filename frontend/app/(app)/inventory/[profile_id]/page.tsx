@@ -111,8 +111,12 @@ function CardRow({ card, onSelect }: { card: Card; onSelect: (c: Card) => void }
         <div className="w-10 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
       )}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">{card.name}</p>
-        <p className="text-xs text-muted-foreground">{card.set_name} · #{card.card_num}</p>
+        <p className="text-sm font-medium truncate">
+          {card.name}{card.language_code === "JA" && card.en_name ? ` (${card.en_name})` : ""}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {card.set_name}{card.language_code === "JA" && card.set_name_en ? ` (${card.set_name_en})` : ""} · #{card.card_num}
+        </p>
         {card.rarity && <p className="text-xs text-muted-foreground">{card.rarity}</p>}
       </div>
     </button>
@@ -130,8 +134,12 @@ function InventoryRow({ item }: { item: InventoryItemWithCard }) {
         <div className="w-10 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
       )}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">{item.card_name}</p>
-        <p className="text-xs text-muted-foreground">{item.set_name} · #{item.card_num}</p>
+        <p className="text-sm font-medium truncate">
+          {item.card_name}{item.language_code === "JA" && item.card_name_en ? ` (${item.card_name_en})` : ""}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {item.set_name}{item.language_code === "JA" && item.set_name_en ? ` (${item.set_name_en})` : ""} · #{item.card_num}
+        </p>
         <div className="flex items-center gap-2 mt-1">
           <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
           {item.rarity && <span className="text-xs text-muted-foreground">{item.rarity}</span>}
@@ -679,8 +687,12 @@ export default function InventoryPage() {
                 <div className="w-14 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
               )}
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold">{confirm.card.name}</p>
-                <p className="text-xs text-muted-foreground">{confirm.card.set_name} · #{confirm.card.card_num}</p>
+                <p className="text-sm font-semibold">
+                  {confirm.card.name}{confirm.card.language_code === "JA" && confirm.card.en_name ? ` (${confirm.card.en_name})` : ""}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {confirm.card.set_name}{confirm.card.language_code === "JA" && confirm.card.set_name_en ? ` (${confirm.card.set_name_en})` : ""} · #{confirm.card.card_num}
+                </p>
                 {confirm.card.rarity && <p className="text-xs text-muted-foreground">{confirm.card.rarity}</p>}
                 {confirm.confidence != null && (
                   <p className="text-xs text-muted-foreground mt-0.5">

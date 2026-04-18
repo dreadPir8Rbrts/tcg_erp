@@ -24,10 +24,12 @@ export interface ScanJob {
 export interface Card {
   id: string;
   name: string;
+  en_name?: string;
   card_num?: string;
   rarity?: string;
   image_url?: string;
   set_name: string;
+  set_name_en?: string;
   release_date?: string;
   series_name?: string;   // null for One Piece
   game: string;
@@ -185,8 +187,10 @@ export interface InventoryItemWithCard {
   notes?: string;
   created_at: string;
   card_name: string;
+  card_name_en?: string;
   card_num?: string;
   set_name: string;
+  set_name_en?: string;
   series_name?: string;   // null for One Piece
   image_url?: string;
   rarity?: string;
