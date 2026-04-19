@@ -20,6 +20,7 @@ import math
 from statistics import median, mean, quantiles
 from typing import Any, Dict, List, Optional
 
+import redis as redis_lib
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -110,7 +111,24 @@ def _get_scraper_app():
         return None
 
 
+def _acquire_scrape_lock(lock_key: str, ttl_seconds: int) -> bool:
+    """Set a Redis lock key with NX (only if not exists). Returns True if lock was acquired."""
+    if not settings.scraper_redis_url:
+        return True  # no Redis — allow enqueue, deduplication not possible
+    try:
+        r = redis_lib.from_url(settings.scraper_redis_url, socket_connect_timeout=2)
+        acquired = r.set(lock_key, 1, nx=True, ex=ttl_seconds)
+        return bool(acquired)
+    except Exception as exc:
+        logger.warning("Redis lock check failed (%s) — allowing enqueue anyway", exc)
+        return True
+
+
 def _enqueue_on_demand(card_v2_id: uuid.UUID) -> bool:
+    lock_key = f"scrape_lock:on_demand:{card_v2_id}"
+    if not _acquire_scrape_lock(lock_key, ttl_seconds=600):
+        logger.info("scrape_card_on_demand already in-flight for %s — skipping duplicate enqueue", card_v2_id)
+        return False
     scraper = _get_scraper_app()
     if scraper is None:
         logger.warning("SCRAPER_REDIS_URL not set — skipping on-demand enqueue for %s", card_v2_id)
@@ -130,6 +148,16 @@ def _enqueue_ebay_on_demand(
     grade: Optional[str],
     condition_type: Optional[str],
 ) -> bool:
+    gc = grading_company or "none"
+    gr = grade or "none"
+    ct = condition_type or "none"
+    lock_key = f"scrape_lock:ebay:{card_v2_id}:{gc}:{gr}:{ct}"
+    if not _acquire_scrape_lock(lock_key, ttl_seconds=300):
+        logger.info(
+            "scrape_ebay_on_demand already in-flight for %s (%s %s) — skipping duplicate enqueue",
+            card_v2_id, grading_company, grade,
+        )
+        return False
     scraper = _get_scraper_app()
     if scraper is None:
         logger.warning("SCRAPER_REDIS_URL not set — skipping eBay on-demand enqueue for %s", card_v2_id)
