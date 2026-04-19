@@ -242,7 +242,7 @@ def list_inventory(
         for comp in all_comps:
             if comp.id in excluded_ids:
                 continue
-            key = (comp.card_v2_id, comp.grading_company, comp.grade)
+            key = (str(comp.card_v2_id), comp.grading_company, comp.grade)
             comp_map.setdefault(key, []).append(comp)
 
     now = datetime.utcnow()
@@ -251,7 +251,7 @@ def list_inventory(
     for item, card, expansion in rows:
         estimated_value = None
         if item.condition_type == "graded" and item.grading_company and item.grade:
-            comps = comp_map.get((item.card_v2_id, item.grading_company, item.grade), [])
+            comps = comp_map.get((str(item.card_v2_id), item.grading_company, item.grade), [])
             if comps:
                 prices = [float(c.price) for c in comps]
                 days_ago = [(now - c.sold_date).days if c.sold_date else 0.0 for c in comps]
