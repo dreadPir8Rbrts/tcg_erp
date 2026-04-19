@@ -68,6 +68,7 @@ export default function ProfilePage() {
   const [activeTab, setActiveTab] = useState<"inventory" | "wishlist" | "shows">("inventory");
   const [search, setSearch] = useState("");
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [showPricingModal, setShowPricingModal] = useState(false);
 
   // Edit state (owner only)
   const [editing, setEditing] = useState(false);
@@ -318,18 +319,34 @@ export default function ProfilePage() {
               </div>
             )}
 
-            {profile.tcg_interests && profile.tcg_interests.length > 0 && (
-              <div>
-                <p className="text-xs text-muted-foreground mb-2">TCG interests</p>
-                <div className="flex flex-wrap gap-2">
-                  {profile.tcg_interests.map((interest) => (
-                    <span key={interest} className="px-2 py-1 text-xs rounded-full border bg-muted">
-                      {interest}
-                    </span>
-                  ))}
-                </div>
+            {(profile.tcg_interests?.length || isOwner) ? (
+              <div className="grid grid-cols-2 gap-3 items-start">
+                {profile.tcg_interests && profile.tcg_interests.length > 0 ? (
+                  <div className="flex flex-col items-center">
+                    <p className="text-xs text-muted-foreground mb-2">TCG interests</p>
+                    <div className="flex flex-wrap gap-2 justify-center">
+                      {profile.tcg_interests.map((interest) => (
+                        <span key={interest} className="px-2 py-1 text-xs rounded-full border bg-muted">
+                          {interest}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : <div />}
+                {isOwner && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setShowPricingModal(true)}
+                      className="rounded-lg px-4 py-2 text-xs font-medium text-white transition-opacity hover:opacity-80"
+                      style={{ background: "#000000", border: "1.5px solid #c9104f" }}
+                    >
+                      Default Pricing Formula
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
+            ) : null}
 
             {isOwner && (
               <div className="flex justify-center pt-1">
@@ -422,11 +439,26 @@ export default function ProfilePage() {
         )}
       </div>
 
-      {/* Pricing formula (owner only) */}
-      {isOwner && (
-        <div className="max-w-xl mx-auto px-6 mt-4">
-          <div className="border rounded-lg p-4 space-y-2">
-            <h2 className="text-sm font-semibold">Pricing formula</h2>
+      {/* Pricing formula modal (owner only) */}
+      {isOwner && showPricingModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setShowPricingModal(false)}
+        >
+          <div
+            className="bg-background border rounded-xl shadow-lg w-full max-w-md mx-4 p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Default Pricing Formula</h2>
+              <button
+                type="button"
+                onClick={() => setShowPricingModal(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
+              >
+                ✕
+              </button>
+            </div>
             <PricingPreferencesForm />
           </div>
         </div>
