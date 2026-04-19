@@ -54,6 +54,8 @@ export interface InventoryItemCreate {
 export interface InventoryItemPatch {
   acquired_price?: number;
   asking_price?: number;
+  is_for_sale?: boolean;
+  is_for_trade?: boolean;
   notes?: string;
 }
 
@@ -232,6 +234,15 @@ export async function patchInventoryItem(itemId: string, patch: InventoryItemPat
     body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Failed to update inventory item: ${res.status}`);
+}
+
+// Soft-delete an inventory item
+export async function deleteInventoryItem(itemId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/v1/inventory/${itemId}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to delete inventory item: ${res.status}`);
 }
 
 // ---------------------------------------------------------------------------

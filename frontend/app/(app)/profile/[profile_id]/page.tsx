@@ -21,6 +21,7 @@ import {
   type InventoryItemWithCard,
   type CardShow,
 } from "@/lib/api";
+import { InventoryEditPanel } from "@/components/inventory/InventoryEditPanel";
 import { PricingPreferencesForm } from "@/components/pricing/PricingPreferencesForm";
 import {
   getProfile,
@@ -66,6 +67,7 @@ export default function ProfilePage() {
   const [uploading, setUploading] = useState<"background" | "avatar" | null>(null);
   const [activeTab, setActiveTab] = useState<"inventory" | "wishlist" | "shows">("inventory");
   const [search, setSearch] = useState("");
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
   // Edit state (owner only)
   const [editing, setEditing] = useState(false);
@@ -168,6 +170,16 @@ export default function ProfilePage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function handleItemUpdated(id: string, patch: Partial<InventoryItemWithCard>) {
+    setInventory((prev) => prev.map((it) => it.id === id ? { ...it, ...patch } : it));
+    setEditingItemId(null);
+  }
+
+  function handleItemDeleted(id: string) {
+    setInventory((prev) => prev.filter((it) => it.id !== id));
+    setEditingItemId(null);
   }
 
   const filteredInventory = useMemo(() => {
@@ -461,31 +473,58 @@ export default function ProfilePage() {
 
               <div className="space-y-1">
                 {filteredInventory.map((item) => (
-                  <div key={item.id} className="flex items-center gap-3 border rounded-lg px-3 py-2">
-                    {item.image_url ? (
-                      <div className="w-10 aspect-[3/4] flex-shrink-0 rounded overflow-hidden border">
-                        <img src={item.image_url} alt={item.card_name} className="w-full h-full object-contain" />
-                      </div>
-                    ) : (
-                      <div className="w-10 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{item.card_name}</p>
-                      <p className="text-xs text-muted-foreground">{item.set_name} · #{item.card_num}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
-                        {item.rarity && <span className="text-xs text-muted-foreground">{item.rarity}</span>}
-                      </div>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      {item.asking_price != null && (
-                        <p className="text-sm font-medium">${Number(item.asking_price).toFixed(2)}</p>
+                  <div key={item.id} className="border rounded-lg overflow-hidden">
+                    <div className="flex items-center gap-3 px-3 py-2">
+                      {item.image_url ? (
+                        <div className="w-10 aspect-[3/4] flex-shrink-0 rounded overflow-hidden border">
+                          <img src={item.image_url} alt={item.card_name} className="w-full h-full object-contain" />
+                        </div>
+                      ) : (
+                        <div className="w-10 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
                       )}
-                      <div className="flex gap-1 mt-1 justify-end">
-                        {item.is_for_sale && <span className="text-xs text-muted-foreground">Sale</span>}
-                        {item.is_for_trade && <span className="text-xs text-muted-foreground">Trade</span>}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {item.card_name}{item.language_code === "JA" && item.card_name_en ? ` (${item.card_name_en})` : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {item.set_name}{item.language_code === "JA" && item.set_name_en ? ` (${item.set_name_en})` : ""} · #{item.card_num}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
+                          {item.rarity && <span className="text-xs text-muted-foreground">{item.rarity}</span>}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        {item.asking_price != null && (
+                          <p className="text-sm font-medium">${Number(item.asking_price).toFixed(2)}</p>
+                        )}
+                        {item.acquired_price != null && (
+                          <p className="text-xs text-muted-foreground">cost ${Number(item.acquired_price).toFixed(2)}</p>
+                        )}
+                        <div className="flex gap-1 mt-1 justify-end items-center">
+                          {item.is_for_sale && <span className="text-xs text-muted-foreground">Sale</span>}
+                          {item.is_for_trade && <span className="text-xs text-muted-foreground">Trade</span>}
+                          {isOwner && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingItemId(editingItemId === item.id ? null : item.id)}
+                              className="ml-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              title="Edit"
+                            >
+                              ✎
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
+                    {isOwner && editingItemId === item.id && (
+                      <InventoryEditPanel
+                        item={item}
+                        onSaved={(patch) => handleItemUpdated(item.id, patch)}
+                        onDeleted={() => handleItemDeleted(item.id)}
+                        onClose={() => setEditingItemId(null)}
+                      />
+                    )}
                   </div>
                 ))}
               </div>

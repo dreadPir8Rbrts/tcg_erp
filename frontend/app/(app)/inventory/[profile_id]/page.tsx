@@ -35,6 +35,7 @@ import {
   type CompWindowDays,
 } from "@/lib/api";
 import { patchInventoryItem } from "@/lib/api";
+import { InventoryEditPanel } from "@/components/inventory/InventoryEditPanel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2 } from "lucide-react";
@@ -134,42 +135,70 @@ function CardRow({ card, onSelect }: { card: Card; onSelect: (c: Card) => void }
   );
 }
 
-function InventoryRow({ item }: { item: InventoryItemWithCard }) {
+function InventoryRow({
+  item,
+  onUpdated,
+  onDeleted,
+}: {
+  item: InventoryItemWithCard;
+  onUpdated: (id: string, patch: Partial<InventoryItemWithCard>) => void;
+  onDeleted: (id: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+
   return (
-    <div className="flex items-center gap-3 border rounded-lg px-3 py-2">
-      {item.image_url ? (
-        <div className="w-10 aspect-[3/4] flex-shrink-0 rounded overflow-hidden border">
-          <img src={item.image_url} alt={item.card_name} className="w-full h-full object-contain" />
+    <div className="border rounded-lg overflow-hidden">
+      <div className="flex items-center gap-3 px-3 py-2">
+        {item.image_url ? (
+          <div className="w-10 aspect-[3/4] flex-shrink-0 rounded overflow-hidden border">
+            <img src={item.image_url} alt={item.card_name} className="w-full h-full object-contain" />
+          </div>
+        ) : (
+          <div className="w-10 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
+        )}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium truncate">
+            {item.card_name}{item.language_code === "JA" && item.card_name_en ? ` (${item.card_name_en})` : ""}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {item.set_name}{item.language_code === "JA" && item.set_name_en ? ` (${item.set_name_en})` : ""} · #{item.card_num}
+          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
+            <span className="text-xs text-muted-foreground">
+              {[item.rarity, item.language_code === "JA" ? "Japanese" : "English"].filter(Boolean).join(" · ")}
+            </span>
+          </div>
         </div>
-      ) : (
-        <div className="w-10 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
+        <div className="text-right flex-shrink-0">
+          {item.asking_price != null && (
+            <p className="text-sm font-medium">${Number(item.asking_price).toFixed(2)}</p>
+          )}
+          {item.acquired_price != null && (
+            <p className="text-xs text-muted-foreground">cost ${Number(item.acquired_price).toFixed(2)}</p>
+          )}
+          <div className="flex gap-1 mt-1 justify-end items-center">
+            {item.is_for_sale && <span className="text-xs text-muted-foreground">Sale</span>}
+            {item.is_for_trade && <span className="text-xs text-muted-foreground">Trade</span>}
+            <button
+              type="button"
+              onClick={() => setEditing((v) => !v)}
+              className="ml-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              title="Edit"
+            >
+              ✎
+            </button>
+          </div>
+        </div>
+      </div>
+      {editing && (
+        <InventoryEditPanel
+          item={item}
+          onSaved={(patch) => { onUpdated(item.id, patch); setEditing(false); }}
+          onDeleted={() => onDeleted(item.id)}
+          onClose={() => setEditing(false)}
+        />
       )}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">
-          {item.card_name}{item.language_code === "JA" && item.card_name_en ? ` (${item.card_name_en})` : ""}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {item.set_name}{item.language_code === "JA" && item.set_name_en ? ` (${item.set_name_en})` : ""} · #{item.card_num}
-        </p>
-        <div className="flex items-center gap-2 mt-1">
-          <Badge variant="secondary" className="text-xs">{formatCondition(item)}</Badge>
-          <span className="text-xs text-muted-foreground">
-            {[item.rarity, item.language_code === "JA" ? "Japanese" : "English"].filter(Boolean).join(" · ")}
-          </span>
-        </div>
-      </div>
-      <div className="text-right flex-shrink-0">
-        {item.asking_price != null && (
-          <p className="text-sm font-medium">${Number(item.asking_price).toFixed(2)}</p>
-        )}
-        {item.acquired_price != null && (
-          <p className="text-xs text-muted-foreground">cost ${Number(item.acquired_price).toFixed(2)}</p>
-        )}
-        <div className="flex gap-1 mt-1 justify-end">
-          {item.is_for_sale && <span className="text-xs text-muted-foreground">Sale</span>}
-          {item.is_for_trade && <span className="text-xs text-muted-foreground">Trade</span>}
-        </div>
-      </div>
     </div>
   );
 }
@@ -601,6 +630,14 @@ export default function InventoryPage() {
     }
   }
 
+  function handleItemUpdated(id: string, patch: Partial<InventoryItemWithCard>) {
+    setInventory((prev) => prev.map((it) => it.id === id ? { ...it, ...patch } : it));
+  }
+
+  function handleItemDeleted(id: string) {
+    setInventory((prev) => prev.filter((it) => it.id !== id));
+  }
+
   const filteredInventory = useMemo(() => {
     if (!inventorySearch.trim()) return inventory;
     const q = inventorySearch.toLowerCase();
@@ -608,8 +645,8 @@ export default function InventoryPage() {
       (item) =>
         item.card_name.toLowerCase().includes(q) ||
         item.set_name.toLowerCase().includes(q) ||
-        item.series_name.toLowerCase().includes(q) ||
-        item.card_num.includes(q)
+        (item.series_name ?? "").toLowerCase().includes(q) ||
+        (item.card_num ?? "").includes(q)
     );
   }, [inventory, inventorySearch]);
 
@@ -1383,7 +1420,12 @@ export default function InventoryPage() {
 
         <div className="space-y-1">
           {filteredInventory.map((item) => (
-            <InventoryRow key={item.id} item={item} />
+            <InventoryRow
+              key={item.id}
+              item={item}
+              onUpdated={handleItemUpdated}
+              onDeleted={handleItemDeleted}
+            />
           ))}
         </div>
       </div>

@@ -232,6 +232,10 @@ def patch_inventory_item(
         item.acquired_price = body.acquired_price
     if body.asking_price is not None:
         item.asking_price = body.asking_price
+    if body.is_for_sale is not None:
+        item.is_for_sale = body.is_for_sale
+    if body.is_for_trade is not None:
+        item.is_for_trade = body.is_for_trade
     if body.notes is not None:
         item.notes = body.notes
 
@@ -257,6 +261,25 @@ def patch_inventory_item(
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
+
+
+@router.delete("/inventory/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_inventory_item(
+    item_id: str,
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+) -> None:
+    """Soft-delete an inventory item (sets deleted_at). Never hard-deletes."""
+    item = db.query(Inventory).filter(
+        Inventory.id == item_id,
+        Inventory.profile_id == profile.id,
+        Inventory.deleted_at.is_(None),
+    ).first()
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventory item not found")
+
+    item.deleted_at = datetime.utcnow()
+    db.commit()
 
 
 def _extract_image_url(images: Optional[list]) -> Optional[str]:
