@@ -16,6 +16,7 @@ import {
   ArrowLeftRight,
   UserCircle,
   FlaskConical,
+  TrendingUp,
 } from "lucide-react";
 
 interface NavLinkProps {
@@ -55,6 +56,7 @@ export function VendorSidebar({ profileId }: VendorSidebarProps) {
     { href: p ? `/scan/${p}` : "/scan", label: "Scan", icon: ScanLine },
     { href: "/card-shows", label: "Card Shows", icon: CalendarDays },
     { href: p ? `/transactions/${p}` : "/transactions", label: "Transactions", icon: ArrowLeftRight },
+    { href: p ? `/price-estimator/${p}` : "/price-estimator", label: "Price Estimator", icon: TrendingUp },
     { href: p ? `/profile/${p}` : "/profile", label: "Profile", icon: UserCircle },
     { href: "/api-tester", label: "API Tester", icon: FlaskConical },
   ];

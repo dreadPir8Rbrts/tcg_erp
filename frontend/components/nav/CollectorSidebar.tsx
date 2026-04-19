@@ -15,6 +15,7 @@ import {
   CalendarDays,
   ArrowLeftRight,
   UserCircle,
+  TrendingUp,
 } from "lucide-react";
 
 interface NavLinkProps {
@@ -54,6 +55,7 @@ export function CollectorSidebar({ profileId }: CollectorSidebarProps) {
     { href: p ? `/wishlist/${p}` : "/wishlist", label: "Wishlist", icon: Bookmark },
     { href: "/card-shows", label: "Card Shows", icon: CalendarDays },
     { href: p ? `/transactions/${p}` : "/transactions", label: "Transactions", icon: ArrowLeftRight },
+    { href: p ? `/price-estimator/${p}` : "/price-estimator", label: "Price Estimator", icon: TrendingUp },
     { href: p ? `/profile/${p}` : "/profile", label: "Profile", icon: UserCircle },
   ];
 
