@@ -8,18 +8,21 @@ Routes:
 """
 
 import uuid
-from datetime import datetime
-from typing import Optional, List
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db, settings
 from app.dependencies import get_current_profile
+from app.models.catalog import SoldComp
+from app.models.excluded_sold_comps import ExcludedSoldComp
 from app.models.inventory import Inventory
 from app.models.profiles import Profile
 from app.models.catalog_v2 import CardV2, ExpansionV2
@@ -28,6 +31,11 @@ from app.schemas.vendor import (
     InventoryItemPatch,
     InventoryItemResponse,
     InventoryItemWithCardResponse,
+)
+from app.api.pricing import (
+    _aggregate_prices,
+    _enqueue_ebay_on_demand,
+    _get_or_create_preferences,
 )
 
 router = APIRouter(tags=["inventory"])
@@ -102,6 +110,7 @@ def get_profile_image_upload_url(
 @router.post("/inventory", response_model=InventoryItemResponse, status_code=status.HTTP_201_CREATED)
 def add_inventory_item(
     body: InventoryItemCreate,
+    background_tasks: BackgroundTasks,
     profile: Profile = Depends(get_current_profile),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -128,6 +137,16 @@ def add_inventory_item(
     db.add(item)
     db.commit()
     db.refresh(item)
+
+    if body.condition_type == "graded":
+        background_tasks.add_task(
+            _enqueue_ebay_on_demand,
+            item.card_v2_id,
+            body.grading_company,
+            body.grade,
+            "graded",
+        )
+
     return {
         "id": item.id,
         "profile_id": item.profile_id,
@@ -181,8 +200,70 @@ def list_inventory(
 
     rows = query.order_by(Inventory.created_at.desc()).offset(offset).limit(limit).all()
 
-    return [
-        {
+    # Build estimated_value for graded items using stored sold comps + user preferences.
+    prefs = _get_or_create_preferences(db, profile.id)
+
+    comp_map: Dict[tuple, List[SoldComp]] = {}
+    graded_combos = {
+        (item.card_v2_id, item.grading_company, item.grade)
+        for item, _, _ in rows
+        if item.condition_type == "graded" and item.grading_company and item.grade
+    }
+
+    if graded_combos:
+        excluded_ids = {
+            row.sold_comp_id
+            for row in db.query(ExcludedSoldComp)
+            .filter(ExcludedSoldComp.profile_id == profile.id)
+            .all()
+        }
+        sold_cutoff = datetime.utcnow() - timedelta(days=prefs.graded_comp_window_days)
+        fetch_cutoff = datetime.utcnow() - timedelta(days=90)
+        conditions = or_(*[
+            and_(
+                SoldComp.card_v2_id == card_v2_id,
+                SoldComp.grading_company == gc,
+                SoldComp.grade == gr,
+            )
+            for card_v2_id, gc, gr in graded_combos
+        ])
+        all_comps = (
+            db.query(SoldComp)
+            .filter(
+                conditions,
+                SoldComp.condition_type == "graded",
+                SoldComp.sold_date >= sold_cutoff,
+                SoldComp.price.isnot(None),
+                SoldComp.fetched_at >= fetch_cutoff,
+            )
+            .order_by(SoldComp.sold_date.desc().nullslast())
+            .all()
+        )
+        for comp in all_comps:
+            if comp.id in excluded_ids:
+                continue
+            key = (comp.card_v2_id, comp.grading_company, comp.grade)
+            comp_map.setdefault(key, []).append(comp)
+
+    now = datetime.utcnow()
+
+    result = []
+    for item, card, expansion in rows:
+        estimated_value = None
+        if item.condition_type == "graded" and item.grading_company and item.grade:
+            comps = comp_map.get((item.card_v2_id, item.grading_company, item.grade), [])
+            if comps:
+                prices = [float(c.price) for c in comps]
+                days_ago = [(now - c.sold_date).days if c.sold_date else 0.0 for c in comps]
+                estimated_value = _aggregate_prices(
+                    prices,
+                    prefs.graded_aggregation,
+                    iqr_multiplier=float(prefs.graded_iqr_multiplier),
+                    halflife_days=prefs.graded_recency_halflife_days,
+                    trim_pct=float(prefs.graded_trim_pct),
+                    days_ago=days_ago,
+                )
+        result.append({
             "id": item.id,
             "card_id": str(item.card_v2_id),
             "condition_type": item.condition_type,
@@ -197,6 +278,7 @@ def list_inventory(
             "is_for_trade": item.is_for_trade,
             "notes": item.notes,
             "created_at": item.created_at,
+            "estimated_value": estimated_value,
             "card_name": card.name,
             "card_name_en": card.en_name,
             "card_num": card.number,
@@ -207,9 +289,8 @@ def list_inventory(
             "rarity": card.rarity,
             "game": card.game,
             "language_code": card.language_code,
-        }
-        for item, card, expansion in rows
-    ]
+        })
+    return result
 
 
 @router.patch("/inventory/{item_id}", response_model=InventoryItemResponse)

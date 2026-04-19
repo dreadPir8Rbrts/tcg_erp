@@ -196,6 +196,7 @@ export interface InventoryItemWithCard {
   is_for_trade: boolean;
   notes?: string;
   created_at: string;
+  estimated_value?: number;
   card_name: string;
   card_name_en?: string;
   card_num?: string;

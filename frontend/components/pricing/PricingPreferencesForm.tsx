@@ -41,7 +41,7 @@ const WINDOW_OPTIONS: Array<{ value: PricingPreferences["graded_comp_window_days
   { value: 90, label: "90 days" },
 ];
 
-export function PricingPreferencesForm() {
+export function PricingPreferencesForm({ onSaved }: { onSaved?: () => void } = {}) {
   const [prefs, setPrefs] = useState<PricingPreferences | null>(null);
   const [draft, setDraft] = useState<PricingPreferences | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,6 +74,7 @@ export function PricingPreferencesForm() {
       setDraft(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+      onSaved?.();
     } catch {
       setError("Failed to save preferences.");
     } finally {

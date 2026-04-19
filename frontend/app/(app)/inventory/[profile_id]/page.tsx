@@ -174,6 +174,9 @@ function InventoryRow({
           {item.asking_price != null && (
             <p className="text-sm font-medium">${Number(item.asking_price).toFixed(2)}</p>
           )}
+          {item.estimated_value != null && (
+            <p className="text-xs text-muted-foreground">est. ${Number(item.estimated_value).toFixed(2)}</p>
+          )}
           {item.acquired_price != null && (
             <p className="text-xs text-muted-foreground">cost ${Number(item.acquired_price).toFixed(2)}</p>
           )}
