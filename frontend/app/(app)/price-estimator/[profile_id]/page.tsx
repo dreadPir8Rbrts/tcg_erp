@@ -15,11 +15,13 @@ import {
   searchCardsSmart,
   searchCards,
   getCard,
+  getInventory,
   getSoldComps,
   excludeSoldComp,
   unexcludeSoldComp,
   getMyPricingPreferences,
   type Card,
+  type InventoryItemWithCard,
   type SoldCompsParams,
   type SoldComp,
   type SoldCompsResponse,
@@ -165,6 +167,10 @@ function PriceEstimatorContent() {
   const [gradingCompany, setGradingCompany]         = useState("psa");
   const [grade, setGrade]                           = useState("");
 
+  // Inventory sidebar
+  const [inventory, setInventory]           = useState<InventoryItemWithCard[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(true);
+
   // Comps
   const [compsResult, setCompsResult]   = useState<SoldCompsResponse | null>(null);
   const [compsLoading, setCompsLoading] = useState(false);
@@ -177,6 +183,17 @@ function PriceEstimatorContent() {
   const [estHalflife, setEstHalflife]           = useState(30);
   const [estTrimPct, setEstTrimPct]             = useState(10);
   const [savedPrefs, setSavedPrefs]             = useState<PricingPreferences | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // Load inventory on mount
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    getInventory()
+      .then(setInventory)
+      .catch(() => {})
+      .finally(() => setInventoryLoading(false));
+  }, []);
 
   // ---------------------------------------------------------------------------
   // URL persistence: load card from ?card_id on mount / URL change
@@ -238,6 +255,32 @@ function PriceEstimatorContent() {
         setEstTrimPct(p.graded_trim_pct);
       }).catch(() => {});
     }
+  }
+
+  function handleSelectFromInventory(item: InventoryItemWithCard) {
+    const card: Card = {
+      id: item.card_id,
+      name: item.card_name,
+      en_name: item.card_name_en,
+      card_num: item.card_num,
+      rarity: item.rarity,
+      image_url: item.image_url,
+      set_name: item.set_name,
+      set_name_en: item.set_name_en,
+      series_name: item.series_name,
+      game: item.game,
+      language_code: item.language_code,
+    };
+    handleSelectCard(card);
+    // Auto-set condition to match this inventory item
+    setConditionType(item.condition_type);
+    if (item.condition_type === "ungraded" && item.condition_ungraded) {
+      setConditionUngraded(item.condition_ungraded);
+    } else if (item.condition_type === "graded") {
+      setGradingCompany(item.grading_company ?? "psa");
+      setGrade(item.grade ?? "");
+    }
+    setCompsResult(null);
   }
 
   async function handleAdvancedSearch() {
@@ -368,8 +411,12 @@ function PriceEstimatorContent() {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold">Price Estimator</h1>
+    <div className="p-6 max-w-6xl mx-auto">
+      <h1 className="text-2xl font-bold mb-6">Price Estimator</h1>
+
+      <div className="flex gap-6 items-start">
+        {/* Main content */}
+        <div className="flex-1 min-w-0 space-y-6">
 
       {/* Search */}
       <div className="border rounded-lg p-4 space-y-3">
@@ -658,6 +705,74 @@ function PriceEstimatorContent() {
           )}
         </div>
       )}
+
+        </div>{/* end main content */}
+
+        {/* Inventory sidebar */}
+        <div className="w-72 flex-shrink-0 border rounded-lg overflow-hidden">
+          <div className="px-3 py-2.5 border-b bg-muted/40">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">My Inventory</p>
+          </div>
+          <div className="max-h-[calc(100vh-12rem)] overflow-y-auto">
+            {inventoryLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : inventory.length === 0 ? (
+              <p className="text-xs text-muted-foreground px-3 py-4">No inventory items yet.</p>
+            ) : (
+              <div className="divide-y divide-border">
+                {inventory.map((item) => {
+                  const isActive =
+                    selectedCard?.id === item.card_id &&
+                    conditionType === item.condition_type &&
+                    (item.condition_type === "ungraded"
+                      ? conditionUngraded === item.condition_ungraded
+                      : gradingCompany === item.grading_company && grade === item.grade);
+                  const conditionLabel =
+                    item.condition_type === "graded" && item.grading_company && item.grade
+                      ? `${item.grading_company.toUpperCase()} ${item.grade}`
+                      : item.condition_ungraded
+                      ? item.condition_ungraded.toUpperCase()
+                      : "—";
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => handleSelectFromInventory(item)}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/50 ${isActive ? "bg-muted" : ""}`}
+                    >
+                      {item.image_url ? (
+                        <div className="w-8 aspect-[3/4] flex-shrink-0 rounded overflow-hidden border">
+                          <img src={item.image_url} alt={item.card_name} className="w-full h-full object-contain" />
+                        </div>
+                      ) : (
+                        <div className="w-8 aspect-[3/4] flex-shrink-0 rounded border bg-muted" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate leading-tight">
+                          {item.language_code === "JA" && item.card_name_en ? item.card_name_en : item.card_name}
+                        </p>
+                        <p className="text-xs text-muted-foreground truncate leading-tight">
+                          {item.set_name_en ?? item.set_name}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-xs text-muted-foreground/80">{conditionLabel}</span>
+                          {item.estimated_value != null && (
+                            <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                              ${item.estimated_value.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+      </div>{/* end flex row */}
     </div>
   );
 }
