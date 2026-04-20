@@ -126,7 +126,7 @@ def _acquire_scrape_lock(lock_key: str, ttl_seconds: int) -> bool:
 
 def _enqueue_on_demand(card_v2_id: uuid.UUID) -> bool:
     lock_key = f"scrape_lock:on_demand:{card_v2_id}"
-    if not _acquire_scrape_lock(lock_key, ttl_seconds=600):
+    if not _acquire_scrape_lock(lock_key, ttl_seconds=70):
         logger.info("scrape_card_on_demand already in-flight for %s — skipping duplicate enqueue", card_v2_id)
         return False
     scraper = _get_scraper_app()
