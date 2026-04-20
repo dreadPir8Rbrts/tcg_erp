@@ -152,7 +152,7 @@ def _enqueue_ebay_on_demand(
     gr = grade or "none"
     ct = condition_type or "none"
     lock_key = f"scrape_lock:ebay:{card_v2_id}:{gc}:{gr}:{ct}"
-    if not _acquire_scrape_lock(lock_key, ttl_seconds=300):
+    if not _acquire_scrape_lock(lock_key, ttl_seconds=70):
         logger.info(
             "scrape_ebay_on_demand already in-flight for %s (%s %s) — skipping duplicate enqueue",
             card_v2_id, grading_company, grade,
