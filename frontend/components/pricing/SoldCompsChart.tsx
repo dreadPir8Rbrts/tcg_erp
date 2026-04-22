@@ -97,21 +97,17 @@ export function SoldCompsChart({ comps, window }: Props) {
     .filter((p) => !p.excluded && p.inWindow)
     .map(({ x, y, title }) => ({ x, y, title }));
 
-  const dimmedPoints: ScatterPoint[] = allPoints
-    .filter((p) => p.excluded || !p.inWindow)
-    .map(({ x, y, title }) => ({ x, y, title }));
-
-  const regLine = chartType === "scatter_bestfit" && activePoints.length >= 2
+const regLine = chartType === "scatter_bestfit" && activePoints.length >= 2
     ? regressionLinePoints(activePoints)
     : [];
 
   const lineData = [...activePoints].sort((a, b) => a.x - b.x);
 
-  const bins = buildPriceBins(allPoints.map((p) => p.y));
+  const bins = buildPriceBins(activePoints.map((p) => p.y));
 
-  const allX = allPoints.map((p) => p.x);
-  const domainX: [number, number] = allX.length
-    ? [Math.min(...allX), Math.max(...allX)]
+  const activeX = activePoints.map((p) => p.x);
+  const domainX: [number, number] = activeX.length
+    ? [Math.min(...activeX), Math.max(...activeX)]
     : [0, 1];
 
   return (
@@ -157,6 +153,7 @@ export function SoldCompsChart({ comps, window }: Props) {
               domain={domainX}
               tickFormatter={formatDate}
               tick={{ fontSize: 10 }}
+              minTickGap={40}
             />
             <YAxis
               dataKey="y"
@@ -173,7 +170,6 @@ export function SoldCompsChart({ comps, window }: Props) {
               dot={{ r: 3, fill: "#3b82f6" }}
               activeDot={{ r: 5 }}
             />
-            <Scatter data={dimmedPoints} fill="#94a3b8" fillOpacity={0.25} />
           </ComposedChart>
         ) : (
           /* scatter and scatter_bestfit */
@@ -189,6 +185,7 @@ export function SoldCompsChart({ comps, window }: Props) {
               domain={domainX}
               tickFormatter={formatDate}
               tick={{ fontSize: 10 }}
+              minTickGap={40}
             />
             <YAxis
               dataKey="y"
@@ -208,7 +205,6 @@ export function SoldCompsChart({ comps, window }: Props) {
               />
             )}
             <Scatter data={activePoints} fill="#3b82f6" fillOpacity={0.85} />
-            <Scatter data={dimmedPoints} fill="#94a3b8" fillOpacity={0.25} />
           </ComposedChart>
         )}
       </ResponsiveContainer>
@@ -217,10 +213,7 @@ export function SoldCompsChart({ comps, window }: Props) {
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500" /> Active
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block w-2.5 h-2.5 rounded-full bg-slate-400 opacity-50" /> Excluded / out of window
-        </span>
-        {chartType === "scatter_bestfit" && (
+{chartType === "scatter_bestfit" && (
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-4 border-t-2 border-dashed border-orange-400" /> Best fit
           </span>

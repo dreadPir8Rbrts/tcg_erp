@@ -759,7 +759,7 @@ function PriceEstimatorContent() {
                           <span className="text-xs text-muted-foreground/80">{conditionLabel}</span>
                           {item.estimated_value != null && (
                             <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                              ${item.estimated_value.toFixed(2)}
+                              ${Number(item.estimated_value).toFixed(2)}
                             </span>
                           )}
                         </div>
